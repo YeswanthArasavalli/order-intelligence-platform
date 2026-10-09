@@ -18,8 +18,9 @@ It is built phase-by-phase, with each phase reviewed against Staff Data Engineer
 > **Certification scope.** M1-M9 and Phase C were verified in a local Docker
 > Compose environment on a single machine. This is a portfolio reference
 > implementation, not a certified production deployment. High availability,
-> disaster recovery, cloud/on-prem certification, load testing, and a real
-> CI/CD pipeline are out of scope. No end-to-end exactly-once delivery guarantee
+> disaster recovery, cloud/on-prem certification and load testing are out of
+> scope; CI/CD is limited to a minimal workflow that runs the self-contained
+> unit suites (no build, deploy or hosted-service automation). No end-to-end exactly-once delivery guarantee
 > is claimed; the data-quality/DLQ path is documented as at-least-once.
 ### Verified pipeline status
 
@@ -99,8 +100,11 @@ provider boundaries and retained evidence.
 
 ### Milestone 9 — operational observability
 
-M9 is **PASS and frozen** with 202 passing tests, real Prometheus/Grafana checks and M1–M8
-runtime regressions. See the [M9 report](milestone9_observability_report.md) and
+M9 is **PASS and frozen**, with real Prometheus/Grafana checks and M1–M8
+runtime regressions. Its recorded test evidence is a 202-test run that passed on
+2026-10-04 inside a Linux verification container with the local serving stack
+reachable — an environment this repository does not reproduce on its own; see
+[Testing and verification](#testing-and-verification). See the [M9 report](milestone9_observability_report.md) and
 [observability contract](observability/CONTRACT.md) for the metric inventory,
 failure/recovery evidence and interpretation limits.
 
@@ -244,7 +248,7 @@ volumes; stop any separately started application processes as well.
 | Serialisation     | Apache Avro                      | —        | Schema-governed message format       |
 | Language          | Python                           | 3.11+    | All application code                 |
 | Containers        | Docker Compose                   | v2       | Local infrastructure                 |
-| CI/CD             | GitHub Actions (stub)            | n/a      | Not implemented - placeholder workflow |
+| CI/CD             | GitHub Actions                   | n/a      | Minimal workflow running the self-contained unit suites only |
 
 ---
 
@@ -315,7 +319,7 @@ shipped here and are not setup prerequisites.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/order-intelligence-platform.git
+git clone https://github.com/YeswanthArasavalli/order-intelligence-platform.git
 cd order-intelligence-platform
 ```
 
@@ -381,11 +385,22 @@ Expected output (after ~60 seconds):
 ✓ All services are healthy. Platform is ready.
 ```
 
-### 6. Run acceptance criteria verification
+### 6. Verify
+
+Two different things that must not be conflated:
 
 ```bash
-make verify
+python main.py verify   # self-contained code verification (no services needed)
+make verify             # health checks against the RUNNING containers
 ```
+
+`make verify` only probes Docker health endpoints (Kafka, Schema Registry,
+MinIO, PostgreSQL, Redis, Prometheus, Grafana). Container health is **not**
+proof that the streaming pipeline produced correct results, and the target
+prints per-check PASS/FAIL but always exits 0 — read its output, not its
+status code. `python main.py verify` runs the application-code suites listed
+in [Testing and verification](#testing-and-verification); that is also what CI
+runs.
 
 ---
 
@@ -435,7 +450,9 @@ make restart               # Restart all services
 make ps                    # Service status table
 make health                # Colour-coded health status per container
 make wait                  # Wait for all services to become healthy
-make verify                # Run Phase 1 acceptance criteria
+make verify                # Container health endpoints only (exits 0 even on FAIL)
+make test-unit             # pytest tests/unit (includes service-dependent suites)
+python main.py verify      # Self-contained verification suites only (no services)
 make logs                  # Tail logs from all services
 make logs-kafka            # Tail Kafka logs only
 make kafka-topics          # List Kafka topics
@@ -523,6 +540,54 @@ they are not the M5 analytical cache:
 
 Legacy helpers use TTL expiry without complete-snapshot invalidation. Their
 currency-free KPI summaries and float conversion are incompatible with M5.
+
+## Testing and verification
+
+`tests/` collects **207 tests** in two materially different tiers.
+
+**Self-contained suites (91 tests)** — run by `python main.py verify` and by CI:
+
+| Suite | Covers | Requires |
+|---|---|---|
+| `tests/unit/test_milestone2.py` (7) | DQ/Silver/DLQ logic | local in-process Spark (`local[*]`), Java 17 |
+| `tests/unit/test_gold.py` (19) | Gold aggregation, Parquet/manifest commits | same |
+| `tests/unit/test_dashboard.py` (37) | M6 read contract, Streamlit render | none |
+| `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
+| `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
+
+No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
+no network beyond loopback are contacted. One M9 baseline-integrity test
+self-skips in this repository because its private `milestone9_evidence/` bundle
+is intentionally not published (90 therefore actually execute).
+
+**Service-dependent suites (116 tests)** — not run by CI:
+
+| Suite | Tests | Requires |
+|---|---|---|
+| `tests/unit/test_alerts.py` | 40 | running PostgreSQL (M7 persistence) |
+| `tests/unit/test_notifications.py` | 42 | running PostgreSQL + loopback HTTP receiver |
+| `tests/unit/test_postgres_serving.py` | 10 | running PostgreSQL |
+| `tests/unit/test_redis_serving.py` | 24 | running PostgreSQL + Redis |
+
+Despite living under `tests/unit/`, these execute against the real local stack
+(`docker compose up -d postgres redis` with a filled `.env`) and create
+isolated disposable schemas/namespaces; they are integration-grade and are
+excluded from `python main.py verify`.
+
+**Recorded history vs. what you can reproduce.** The 179-test (M8) and
+202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
+executed inside the Linux verification container with the full local stack up;
+they are historical evidence, not results any host reproduces by default. What
+was actually executed in this public tree on 2026-10-09 (Windows 11 host,
+Python 3.11): 207 tests collected; `python main.py verify` produced
+**87 passed, 3 failed, 1 skipped** in ~8.5 minutes. The three failures are all
+`test_gold` Parquet-write checks failing in Hadoop's Windows shell
+(`winutils.exe`/`HADOOP_HOME` absent) — a documented Spark-on-Windows
+limitation of the host, not a platform logic defect; the same tests were part
+of the passing Linux container runs. On Linux (including the CI workflow's
+`ubuntu-latest` runner) the self-contained tier is expected to execute all 90
+runnable tests, but the workflow has **not yet run on GitHub**: Actions results
+exist only after an authorized push.
 
 ---
 
@@ -623,11 +688,18 @@ M1-M9 and Phase C are complete and frozen.
 | Phase C | Local Docker packaging / sealed MinIO runtime verification | FROZEN |
 
 **There is no M10.** No further milestones are planned in this repository.
-**CI/CD is not implemented** - `.github/workflows/ci.yml` is a placeholder stub
-only.
+**CI/CD is minimal by design** - `.github/workflows/ci.yml` runs only
+`python main.py verify` (the self-contained suites) on push and pull requests.
+There is no build, deploy or hosted-service automation, and no deployment
+pipeline is claimed.
 
 ---
 ## Phase 1 acceptance criteria
+
+> Historical Phase-1 infrastructure checklist, retained for provenance. It
+> predates the M1–M9 pipeline and checks service reachability only; `make
+> verify` prints per-check PASS/FAIL but the target always exits 0. Code-level
+> verification is `python main.py verify` / the CI workflow.
 
 Before proceeding to Phase 2, all of the following must pass:
 
@@ -684,10 +756,11 @@ This project is built phase-by-phase with a Staff Data Engineer review gate betw
 1. Fork the repository
 2. Create a branch: `feature/phase-N-description`
 3. Implement the phase per the acceptance criteria
-4. Submit a PR — include `docker compose ps` output and `make verify` results
+4. Submit a PR — include the `python main.py verify` output (CI runs the same
+   command); add `docker compose ps` output when the change touches runtime services
 
 ---
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

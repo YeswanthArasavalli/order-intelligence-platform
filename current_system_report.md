@@ -9,6 +9,34 @@
 **Persistent data destroyed:** None  
 **OIP containers:** Started temporarily for verification, then stopped. Volumes were preserved.
 
+> **Historical status note (added 2026-10-09).** This forensic audit is a
+> pre-milestone snapshot of the private master, preserved unmodified as
+> provenance. Milestones M1–M9 and Phase C (all PASS/FROZEN, evidenced in
+> `milestone1..9_*.md` and `packaging_phase_c_report.md`) supersede many
+> findings below; do not read this document as the current system description.
+> Reconciled against the shipped source on 2026-10-09:
+>
+> - B-002 (“`main.py` references missing `alerts.daemon`”) no longer matches the
+>   source: the dispatcher maps `alerts` to `alerts.evaluator:main`.
+> - B-004 (topic dispatcher call missing a required argument) no longer matches
+>   the source: `create_topics()` declares default arguments.
+> - B-003 (missing `scripts.verify`) is resolved in this public copy:
+>   `scripts/verify.py` now implements `python main.py verify` as a
+>   self-contained unit-test dispatcher; it was executed locally on 2026-10-09
+>   (87 passed, 3 failed on host-limited Spark/Windows Parquet writes, 1
+>   skipped; see README 'Testing and verification').
+> - “Tests” and “Grafana dashboards” listed as nonexistent now exist in
+>   source: `tests/unit/` collects 207 tests and
+>   `observability/grafana/dashboards/` ships three dashboard JSONs. Historical
+>   pass counts (179/202) ran inside the Linux verification container with the
+>   local serving stack up; they are runtime evidence of that run only.
+> - `.github/workflows/ci.yml` is no longer the echo placeholder described
+>   below in this public copy; it now runs the self-contained suites. Its
+>   GitHub Actions result has not yet been produced (no push since the change).
+>
+> All other findings remain historical source-level observations, some of which
+> were never re-tested at runtime; they are not converted into runtime claims.
+
 ---
 
 ## 1. Executive Summary

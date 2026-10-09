@@ -42,8 +42,15 @@ environment**; the single provider is a controlled local HTTP transport with dur
 receipts. M7 source hashes remain unchanged.
 
 Milestone 9 is **PASS and frozen** (2026-10-04): 202 passing tests (179 frozen tests plus
-23 observability tests), real Prometheus scrapes, three provisioned Grafana
-dashboards, failure/restart verification and passing M1–M8 runtime regressions.
+23 observability tests) executed inside the Linux verification container with the
+local serving stack reachable — historical, environment-specific evidence, not a
+native result of any single host — plus real Prometheus scrapes, three provisioned
+Grafana dashboards, failure/restart verification and passing M1–M8 runtime
+regressions. In this public repository, 91 tests (including the verification
+dispatcher added 2026-10-09) are self-contained via `python main.py verify`; the
+other 116 require a running PostgreSQL/Redis stack, and the M9 baseline-integrity
+test skips because its private `milestone9_evidence/` bundle is not published.
+See README 'Testing and verification'.
 See `milestone9_observability_report.md` and `observability/CONTRACT.md`. The
 45 bounded operational metric families observe existing lifecycles and read-only
 metadata. Twelve files have minimal instrumentation with unchanged business AST;

@@ -1,10 +1,38 @@
-# CI pipeline stub — Phase 13 will complete this
+# Minimal CI: runs ONLY the repository's self-contained unit verification.
+# Scope boundary: this workflow executes `python main.py verify`
+# (scripts/verify.py), which runs the suites that need no Docker, Kafka,
+# Spark cluster, MinIO, PostgreSQL or Redis services and no credentials or
+# secrets. Service-dependent suites (alerts, notifications, PostgreSQL/Redis
+# serving) are intentionally excluded; see README "Testing and verification".
+# There is no build, deploy or hosted-service automation in this repository.
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
 jobs:
-  placeholder:
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "CI pipeline implemented in Phase 13"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Java 17 (required by the local Spark test suites)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run self-contained verification suite
+        run: python main.py verify

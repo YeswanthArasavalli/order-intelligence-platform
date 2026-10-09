@@ -12,7 +12,7 @@ Usage:
     python main.py notifications     # M8 one-shot persisted-event delivery
     python main.py metrics           # start metrics exporter (Phase 11)
     python main.py topics            # create Kafka topics (Phase 3)
-    python main.py verify            # verify infrastructure (Phase 1)
+    python main.py verify            # run self-contained verification tests (no services required)
 """
 
 import sys
