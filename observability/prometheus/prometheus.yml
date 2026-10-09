@@ -1,0 +1,28 @@
+# M9: scrape only implemented endpoints. Infrastructure is probed by the exporter.
+global:
+  scrape_interval: 5s
+  scrape_timeout: 3s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+    project: order-intelligence-platform
+
+scrape_configs:
+  - job_name: oip
+    static_configs:
+      - targets: ["metrics-exporter:8000"]
+    sample_limit: 3000
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'process_start_time_seconds|process_cpu_seconds_total|process_resident_memory_bytes|promhttp_metric_handler_requests_total'
+        action: keep
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'process_start_time_seconds|process_cpu_seconds_total|process_resident_memory_bytes|promhttp_metric_handler_requests_total'
+        action: keep

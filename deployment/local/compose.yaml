@@ -1,0 +1,194 @@
+name: oip-packaged
+x-env: &env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: order_intelligence
+  POSTGRES_USER: oip_user
+  POSTGRES_PASSWORD: local-example-only
+  POSTGRES_GOLD_SCHEMA: gold_serving
+  REDIS_HOST: redis
+  REDIS_GOLD_NAMESPACE: oip:m5:gold-serving
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  SCHEMA_REGISTRY_URL: http://schema-registry:8081
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ROOT_USER: local-example
+  MINIO_ROOT_PASSWORD: local-example-only
+  SPARK_MASTER: local[2]
+  PYSPARK_PYTHON: /opt/venv/bin/python3
+  PYSPARK_DRIVER_PYTHON: /opt/venv/bin/python3
+  OIP_TELEMETRY_URL: "${OIP_TELEMETRY_URL:-}"
+  OIP_DASHBOARD_HEALTH_URL: http://dashboard:8501/_stcore/health
+  GRAFANA_ADMIN_PASSWORD: local-example-only
+services:
+  kafka:
+    image: confluentinc/cp-kafka@sha256:686262702020bc0513a5bfa6468bd4e3c10463d783f0569ad9ba0205ea11c4c5
+    platform: linux/amd64
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: "1"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+    volumes: [kafka-data:/var/lib/kafka/data, kafka-secrets:/etc/kafka/secrets]
+    healthcheck:
+      test: [CMD, kafka-broker-api-versions, --bootstrap-server, localhost:9092]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+  schema-registry:
+    image: confluentinc/cp-schema-registry@sha256:44c9e2dd719aa197b26d3e6f51a8e6a48d98016782ba9e41f68d1b7b31f892d1
+    platform: linux/amd64
+    depends_on: {kafka: {condition: service_healthy}}
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: "1"
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD
+      SCHEMA_REGISTRY_LOG4J_ROOT_LOGLEVEL: WARN
+    volumes: [registry-secrets:/etc/schema-registry/secrets]
+    healthcheck:
+      test: [CMD-SHELL, "curl --fail --silent http://localhost:8081/config >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  minio:
+    image: minio/minio@sha256:ac591851803a79aee64bc37f66d77c56b0a4b6e12d9e5356380f4105510f2332
+    pull_policy: never
+    platform: linux/amd64
+    environment:
+      MINIO_ROOT_USER: local-example
+      MINIO_ROOT_PASSWORD: local-example-only
+    command: [server, /data, --console-address, ":9001"]
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://localhost:9000/minio/health/ready]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  minio-init:
+    image: minio/mc@sha256:ba8af71554963bb6ad5c4301ff3d82176e96f0b0c7595047da989cacfae83682
+    pull_policy: never
+    platform: linux/amd64
+    depends_on: {minio: {condition: service_healthy}}
+    entrypoint: [/bin/sh, -ec]
+    command: ["mc alias set local http://minio:9000 local-example local-example-only >/dev/null; for b in bronze silver gold checkpoints; do mc mb --ignore-existing local/$$b; done"]
+  postgres:
+    image: postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+    platform: linux/amd64
+    environment: {POSTGRES_DB: order_intelligence, POSTGRES_USER: oip_user, POSTGRES_PASSWORD: local-example-only}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, oip_user, -d, order_intelligence]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  redis:
+    image: redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    platform: linux/amd64
+    command: [redis-server, --appendonly, "yes", --appendfsync, everysec]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  core:
+    image: oip-local-core:phase-c
+    pull_policy: never
+    environment: *env
+    profiles: [jobs]
+    volumes: [receiver-ledger:/tmp/omnirush, oracle-evidence:/opt/oip/milestone8_evidence]
+  spark:
+    image: oip-local-spark:phase-c
+    pull_policy: never
+    environment: *env
+    profiles: [jobs]
+    volumes: [receiver-ledger:/tmp/omnirush, oracle-evidence:/opt/oip/milestone8_evidence]
+  dashboard:
+    image: oip-local-core:phase-c
+    pull_policy: never
+    environment: *env
+    command: [python3, -m, streamlit, run, dashboard/app.py, --server.address=0.0.0.0, --server.port=8501, --server.headless=true, --browser.gatherUsageStats=false]
+    ports: ["8501:8501"]
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health',timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  receiver:
+    image: oip-local-core:phase-c
+    pull_policy: never
+    environment: *env
+    command: [python3, /opt/pack/entrypoints.py, receiver]
+    stop_grace_period: 30s
+    volumes: [receiver-ledger:/tmp/omnirush]
+    healthcheck:
+      test: [CMD, python3, -c, "import socket; socket.create_connection(('127.0.0.1',18088),2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  notifications:
+    image: oip-local-core:phase-c
+    pull_policy: never
+    network_mode: service:receiver
+    profiles: [jobs]
+    environment:
+      <<: *env
+      NOTIFICATION_PROVIDER: controlled_http
+      NOTIFICATION_ENDPOINT: http://127.0.0.1:18088/notify
+      NOTIFICATION_DESTINATION: packaged-inbox
+    command: [python3, -m, notifications.service, --schema, m8_packaged]
+  metrics-exporter:
+    image: oip-local-exporter:phase-c
+    pull_policy: never
+    profiles: [observability]
+    environment:
+      <<: *env
+      METRICS_COLLECTION_INTERVAL_SECONDS: "15"
+    command: [python3, /opt/pack/entrypoints.py, exporter]
+    stop_grace_period: 30s
+    ports: ["8000:8000"]
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  prometheus:
+    image: prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    profiles: [observability]
+    volumes: ["./assets/source/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "prometheus-data:/prometheus"]
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana@sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3
+    profiles: [observability]
+    environment: {GF_SECURITY_ADMIN_USER: admin, GF_SECURITY_ADMIN_PASSWORD: local-example-only, GF_USERS_ALLOW_SIGN_UP: "false", GF_ANALYTICS_REPORTING_ENABLED: "false", GF_METRICS_ENABLED: "true"}
+    volumes: ["./assets/source/observability/grafana/provisioning:/etc/grafana/provisioning:ro", "./assets/source/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro", "grafana-data:/var/lib/grafana"]
+    ports: ["3000:3000"]
+volumes:
+  kafka-data:
+  kafka-secrets:
+  registry-secrets:
+  minio-data:
+  postgres-data:
+  redis-data:
+  receiver-ledger:
+  oracle-evidence:
+  prometheus-data:
+  grafana-data:
+networks:
+  default:
+    name: "${COMPOSE_PROJECT_NAME:-oip-packaged}_default"
+    driver: bridge

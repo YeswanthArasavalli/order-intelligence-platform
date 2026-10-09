@@ -1,0 +1,24 @@
+# =============================================================================
+# Grafana Datasource Provisioning — Prometheus
+# =============================================================================
+# This file is mounted at /etc/grafana/provisioning/datasources/
+# Grafana reads it at startup and creates the datasource automatically.
+# No manual UI configuration is needed.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus-oip
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: "15s"
+      queryTimeout: "60s"
+      exemplarTraceIdDestinations: []
+    version: 1

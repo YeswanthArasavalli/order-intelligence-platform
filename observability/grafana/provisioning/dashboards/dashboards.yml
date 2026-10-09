@@ -1,0 +1,23 @@
+# =============================================================================
+# Grafana Dashboard Provider — Order Intelligence Platform
+# =============================================================================
+# Grafana reads this file at startup and loads dashboard JSON files from
+# the configured path automatically. Dashboard JSON files placed in
+# observability/grafana/dashboards/ will appear in Grafana without
+# manual import.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: "OIP Dashboards"
+    orgId: 1
+    folder: "Order Intelligence Platform"
+    folderUid: "oip"
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

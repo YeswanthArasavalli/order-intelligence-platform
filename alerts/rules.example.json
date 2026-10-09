@@ -1,0 +1,6 @@
+[
+  {"rule_id":"inr-net-low","kind":"revenue_threshold","currency":"INR","dimensions":{"region":"north-india"},"metric":"net_revenue","comparison":"lt","threshold":"10.00000000","cooldown_seconds":900,"severity":"WARNING","enabled":true},
+  {"rule_id":"usd-net-low","kind":"revenue_threshold","currency":"USD","dimensions":{"region":"north-india"},"metric":"net_revenue","comparison":"lt","threshold":"10.00000000","cooldown_seconds":900,"severity":"WARNING","enabled":true},
+  {"rule_id":"inr-net-drop","kind":"revenue_drop","currency":"INR","dimensions":{"region":"north-india"},"metric":"net_revenue","comparison":"lt","threshold":"0.70000000","cooldown_seconds":900,"severity":"CRITICAL","enabled":true},
+  {"rule_id":"inr-product-low","kind":"product_threshold","currency":"INR","dimensions":{"product_id":"prod-3017","product_name":"Case 17"},"metric":"revenue","comparison":"lte","threshold":"10.00000000","cooldown_seconds":900,"severity":"INFO","enabled":true}
+]

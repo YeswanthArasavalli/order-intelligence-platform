@@ -1,0 +1,10 @@
+# CI pipeline stub — Phase 13 will complete this
+name: CI
+on: [push, pull_request]
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "CI pipeline implemented in Phase 13"

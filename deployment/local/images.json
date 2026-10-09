@@ -1,0 +1,18 @@
+{
+  "platform": "linux/amd64",
+  "minio_archive": {"filename": "minio_frozen_linux_amd64_sealed_20261005.tar", "bytes": 80105984, "sha256": "58800abbac143c831a53c00fadbe9fe0af30914c83835fd52bc7a7c487fe355a"},
+  "images": {
+    "daemon": "docker@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659",
+    "python": "python@sha256:8fb099199b9f2d70342674bd9dbccd3ed03a258f26bbd1d556822c6dfc60c317",
+    "exporter_python": "python@sha256:2333bd330d12de02514770b3585cad313644316047cdee24a7acfdece6de6efb",
+    "spark": "apache/spark@sha256:2442368ef4a5ca60e81604cf48d22d847344d009237cd21a1943b060278898bb",
+    "kafka": "confluentinc/cp-kafka@sha256:686262702020bc0513a5bfa6468bd4e3c10463d783f0569ad9ba0205ea11c4c5",
+    "registry": "confluentinc/cp-schema-registry@sha256:44c9e2dd719aa197b26d3e6f51a8e6a48d98016782ba9e41f68d1b7b31f892d1",
+    "postgres": "postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
+    "redis": "redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+    "prometheus": "prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94",
+    "grafana": "grafana/grafana@sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3",
+    "minio": "minio/minio@sha256:ac591851803a79aee64bc37f66d77c56b0a4b6e12d9e5356380f4105510f2332",
+    "mc": "minio/mc@sha256:ba8af71554963bb6ad5c4301ff3d82176e96f0b0c7595047da989cacfae83682"
+  }
+}

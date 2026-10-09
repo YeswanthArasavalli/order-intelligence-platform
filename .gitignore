@@ -1,0 +1,81 @@
+# =============================================================================
+# Order Intelligence Platform — .gitignore
+# =============================================================================
+
+# Environment — NEVER commit .env (contains secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.python-version
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.coveragerc
+
+# Spark
+derby.log
+metastore_db/
+spark-warehouse/
+*.crc
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files — do not commit raw data or Parquet files
+data/*.json
+data/*.csv
+data/*.parquet
+*.parquet
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker build artifacts
+.dockerignore
+
+# Grafana dashboard exports (auto-provisioned, not hand-edited)
+# Uncomment to also ignore dashboards:
+# observability/grafana/dashboards/*.json
+
+# MinIO data (if accidentally mapped to local path)
+minio-data/
+
+# Checkpoint data (stored in MinIO, not local)
+checkpoints/
+
+
+# Public release protections (added during sanitization) - defense in depth
+.ruff_cache/
+.remember/
+deployment/local/assets/
+deployment/local/evidence/
+milestone*_evidence/
+*.tar
+*.jar
+*.whl
+!deployment/local/.dockerignore

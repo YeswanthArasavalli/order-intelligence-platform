@@ -1,0 +1,82 @@
+# =============================================================================
+# Order Intelligence Platform — Python Dependencies
+# Direct dependencies pinned; transitive dependencies are resolved by pip.
+# Selected host interpreter: Python 3.11 (see milestone1 review report).
+# Install: pip install -r requirements.txt
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# KAFKA — Producer and consumer
+# ---------------------------------------------------------------------------
+confluent-kafka[schemaregistry]==2.15.1  # Kafka + Schema Registry serializers
+fastavro==1.12.2                # Avro serialization and schemaless decoding
+authlib==1.8.0                  # Required by confluent-kafka Schema Registry client
+
+# ---------------------------------------------------------------------------
+# SPARK — Structured Streaming (PySpark)
+# Use Java 17 (Spark 3.5 supports Java 8/11/17, not arbitrary newer JDKs).
+# ---------------------------------------------------------------------------
+pyspark==3.5.9
+
+# ---------------------------------------------------------------------------
+# DATA LAKE — MinIO / S3 client
+# ---------------------------------------------------------------------------
+boto3==1.35.62                  # S3-compatible client for MinIO
+botocore==1.35.62               # Required by boto3
+
+# ---------------------------------------------------------------------------
+# DATABASE
+# ---------------------------------------------------------------------------
+psycopg2-binary==2.9.10         # PostgreSQL adapter (binary — no build deps)
+sqlalchemy==2.0.36              # ORM / connection pooling layer
+
+# ---------------------------------------------------------------------------
+# CACHE
+# ---------------------------------------------------------------------------
+redis==5.2.0                    # Redis client (redis-py)
+
+# ---------------------------------------------------------------------------
+# DASHBOARD
+# ---------------------------------------------------------------------------
+streamlit==1.40.1               # Live dashboard
+plotly==5.24.1                  # Charts used by Streamlit
+pandas==2.2.3                   # DataFrame manipulation in dashboard
+
+# ---------------------------------------------------------------------------
+# DATA GENERATION — Phase 2
+# ---------------------------------------------------------------------------
+faker==31.0.0                   # Realistic test data generation
+
+# ---------------------------------------------------------------------------
+# OBSERVABILITY — Prometheus metrics exporter
+# ---------------------------------------------------------------------------
+prometheus-client==0.21.0       # Custom metrics exporter (Phase 11)
+
+# ---------------------------------------------------------------------------
+# HTTP / ALERTING
+# ---------------------------------------------------------------------------
+requests==2.34.2                # HTTP client; also used by Confluent Avro extras
+httpx==0.27.2                   # Async HTTP for Slack/PagerDuty webhooks
+tenacity==9.0.0                 # Retry logic for external API calls
+
+# ---------------------------------------------------------------------------
+# CONFIGURATION & UTILITIES
+# ---------------------------------------------------------------------------
+python-dotenv==1.0.1            # Loads .env file into os.environ
+pydantic==2.9.2                 # Settings validation and type enforcement
+pydantic-settings==2.6.1        # Pydantic v2 settings management
+structlog==24.4.0               # Structured JSON logging
+
+# ---------------------------------------------------------------------------
+# TESTING
+# ---------------------------------------------------------------------------
+pytest==8.3.3
+pytest-cov==6.0.0               # Coverage reporting
+pytest-asyncio==0.24.0          # Async test support
+pytest-mock==3.14.0             # Mocking utilities
+
+# ---------------------------------------------------------------------------
+# CODE QUALITY (dev only — included for CI)
+# ---------------------------------------------------------------------------
+ruff==0.7.4                     # Linting (replaces flake8 + isort)
+black==24.10.0                  # Code formatting
