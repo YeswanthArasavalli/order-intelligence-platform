@@ -1,7 +1,9 @@
 """Actual Spark aggregation and local Parquet/manifest persistence tests."""
 
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from pyspark.sql import SparkSession, functions as F
@@ -13,6 +15,31 @@ from streaming import gold_aggregator as gold
 from streaming.bronze_writer import ORDER_EVENT_FIELDS
 
 BASE = 1791043200000  # minute and five-minute aligned
+
+
+def _windows_local_fs_prerequisite_missing():
+    """True only on Windows when Hadoop's ``winutils.exe`` is unavailable.
+
+    Committing Parquet and manifest files goes through Hadoop's
+    ``RawLocalFileSystem``, which on Windows shells out to ``winutils.exe``
+    (under ``HADOOP_HOME``) to set directory permissions. That binary is an
+    external Windows prerequisite the repository deliberately does not
+    redistribute. On any non-Windows host (including CI) it is never required,
+    so these tests always execute there and run on Windows once ``HADOOP_HOME``
+    is provisioned. This isolates a platform prerequisite; it does not weaken
+    any assertion.
+    """
+    if os.name != "nt":
+        return False
+    home = os.environ.get("HADOOP_HOME") or os.environ.get("hadoop.home.dir")
+    return not (home and (Path(home) / "bin" / "winutils.exe").is_file())
+
+
+requires_winutils = pytest.mark.skipif(
+    _windows_local_fs_prerequisite_missing(),
+    reason="Windows Spark local-filesystem writes require winutils.exe under "
+           "HADOOP_HOME (see README 'Testing and verification'); runs on Linux CI",
+)
 
 
 @pytest.fixture(scope="module")
@@ -102,6 +129,7 @@ def test_unverified_and_conflicting_sources_fail(spark):
         gold.merge_events(one, different)
 
 
+@requires_winutils
 def test_multibatch_replay_and_persistence(spark, monkeypatch, tmp_path):
     root = str(tmp_path / "gold") + "/"
     monkeypatch.setenv("KAFKA_TOPIC_ORDERS", "unit-gold")
@@ -125,6 +153,7 @@ def test_multibatch_replay_and_persistence(spark, monkeypatch, tmp_path):
     assert [r.net_revenue for r in rows] == [25, 100]
 
 
+@requires_winutils
 def test_manifest_failure_recovery_and_empty(spark, monkeypatch, tmp_path):
     root = str(tmp_path / "gold") + "/"
     monkeypatch.setenv("KAFKA_TOPIC_ORDERS", "unit-gold")
@@ -160,6 +189,7 @@ def test_manifest_failure_recovery_and_empty(spark, monkeypatch, tmp_path):
     assert read_gold(spark, root, "revenue_by_minute").first().net_revenue == 70
 
 
+@requires_winutils
 def test_latest_corrupt_commit_does_not_fall_back(spark, tmp_path):
     root = str(tmp_path / "gold") + "/"
     gold_store._publish_manifest(spark, root, {"version": 1, "contract_version": "bad", "tables": {}})
