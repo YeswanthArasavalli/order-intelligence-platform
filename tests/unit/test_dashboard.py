@@ -2,21 +2,76 @@
 
 import base64
 import copy
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
 import redis
+import streamlit as st
 from sqlalchemy.exc import OperationalError
 from streamlit.testing.v1 import AppTest
 
+from dashboard import app as dashboard_app
 from dashboard import read_service as service
+from dashboard.demo_provider import (DEMO_DISCLOSURE, DEMO_MODE_ENV_VAR, DEMO_MODE_VALUE, MODE_DEMO, MODE_REAL,
+                                     selected_mode)
 from scripts.verify_milestone5 import canonical
 
 APP = str(Path(__file__).resolve().parents[2] / "dashboard" / "app.py")
+
+# ---------------------------------------------------------------------------
+# P1 test isolation: the render path takes its mode and its whole configuration
+# from the environment. ``dashboard/app.py`` branches on ``selected_mode()`` and
+# real mode builds ``DashboardConfig.from_env()``, so any value exported by the
+# launching shell decides what a render test sees. The boundary below removes
+# that dependency instead of hoping the environment is clean.
+# ---------------------------------------------------------------------------
+
+ISOLATED_ENV_KEYS = (DEMO_MODE_ENV_VAR, "POSTGRES_GOLD_SCHEMA", "POSTGRES_DB", "REDIS_GOLD_NAMESPACE",
+                     "DASHBOARD_SOURCE_TOPIC", "DASHBOARD_DEFAULT_CURRENCY", "DASHBOARD_REFRESH_SECONDS")
+
+
+def clear_streamlit_caches() -> None:
+    """Empty the process-global ``st.cache_resource`` store the app fills.
+
+    ``AppTest`` execs ``dashboard/app.py`` under its own module identity, so the
+    cached entry belongs to that run, not to the imported module object: calling
+    ``dashboard_app.get_read_service.clear()`` from the test process leaves the
+    entry in place (verified against streamlit 1.40.1, where a following session
+    still reused the cached service). The global API is the mechanism that works.
+    Production code is untouched: the cache itself stays exactly where it is.
+    """
+    st.cache_resource.clear()
+
+
+@contextmanager
+def real_mode_boundary(monkeypatch):
+    """Force real mode with an empty cache, and keep the cache empty on the way out.
+
+    A context manager rather than only a fixture body, so the finalizer also runs
+    when the enclosed test raises: a failed render must not hand its cached
+    ``DashboardReadService`` to the next test. ``monkeypatch.delenv`` restores the
+    environment itself through pytest's own teardown, including on failure.
+    """
+    for key in ISOLATED_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    clear_streamlit_caches()
+    try:
+        yield
+    finally:
+        clear_streamlit_caches()
+
+
+@pytest.fixture(autouse=True)
+def isolate_dashboard_environment(monkeypatch):
+    """Start every test here with ``OIP_DEMO_MODE`` unset and no cached app state."""
+    with real_mode_boundary(monkeypatch):
+        yield
 
 
 def fixture_snapshot():
@@ -304,3 +359,105 @@ def test_streamlit_tables_lead_with_window_columns_and_render_null_dash(setup, m
     # The product table shared the same root cause and received the same fix.
     product_frame = app.dataframe[1].value
     assert list(product_frame.columns[:2]) == ["window_start", "window_end"]
+
+
+# ---------------------------------------------------------------------------
+# P1 isolation regression: mode selection and cache state at test boundaries
+# ---------------------------------------------------------------------------
+
+def test_hostile_demo_flag_cannot_reach_a_real_render(setup, monkeypatch):
+    """An exported ``OIP_DEMO_MODE=synthetic`` must not move a real render onto demo data.
+
+    ``monkeypatch.setenv`` reproduces what a shell export leaves in the pytest
+    process; the isolation boundary is the same one the autouse fixture applies
+    before every test, so this asserts the real protection rather than a stub.
+    """
+    _, _, _, reader = setup
+    snapshot = reader.load()
+    monkeypatch.setattr(service.DashboardReadService, "load", lambda self: snapshot)
+    monkeypatch.setenv(DEMO_MODE_ENV_VAR, DEMO_MODE_VALUE)
+    assert selected_mode() == MODE_DEMO  # the contamination is live before isolation
+    with real_mode_boundary(monkeypatch):
+        assert os.environ.get(DEMO_MODE_ENV_VAR) is None
+        assert selected_mode() == MODE_REAL
+        app = AppTest.from_file(APP).run(timeout=20)
+    assert not app.exception and not app.error
+    # Markers only the real source path produces: M5 metadata and the real filters.
+    assert app.selectbox(key="period").options == dashboard_app.REAL_PERIOD_OPTIONS
+    assert any("Gold version: 3" in caption.value for caption in app.caption)
+    assert any(button.label == "Refresh snapshot" for button in app.button)
+    assert DEMO_DISCLOSURE not in {warning.value for warning in app.warning}
+    assert len(app.dataframe) == 4
+
+
+def test_unisolated_demo_flag_really_does_change_the_render(monkeypatch):
+    """Negative control: without the boundary the flag sends the app down the demo path.
+
+    This documents why the isolation fixture is load-bearing. It asserts the
+    production semantics are intentional (an explicit flag wins), not a defect.
+    """
+    monkeypatch.setenv(DEMO_MODE_ENV_VAR, DEMO_MODE_VALUE)
+    app = AppTest.from_file(APP).run(timeout=30)
+    assert not app.exception
+    assert app.selectbox(key="period").options == dashboard_app.DEMO_PERIOD_OPTIONS
+    assert DEMO_DISCLOSURE in {warning.value for warning in app.warning}
+
+
+def test_isolation_preserves_an_explicit_synthetic_selection(monkeypatch):
+    """Clearing the environment must not force demo tests onto the real path."""
+    monkeypatch.setenv(DEMO_MODE_ENV_VAR, DEMO_MODE_VALUE)
+    with real_mode_boundary(monkeypatch):
+        monkeypatch.setenv(DEMO_MODE_ENV_VAR, DEMO_MODE_VALUE)
+        assert selected_mode() == MODE_DEMO
+        app = AppTest.from_file(APP).run(timeout=30)
+    assert not app.exception
+    assert app.selectbox(key="period").options == dashboard_app.DEMO_PERIOD_OPTIONS
+    assert DEMO_DISCLOSURE in {warning.value for warning in app.warning}
+    assert not any("Refresh snapshot" == button.label for button in app.button)
+
+
+def test_caches_do_not_survive_a_failing_test(setup, monkeypatch):
+    """Cleanup runs on the failure path: a raise must not leave a cached service behind.
+
+    The cached ``DashboardReadService`` is built under the failing test's
+    monkeypatched class, so handing it to the next test would be cross-test state.
+    Counting constructions proves the second session rebuilt rather than reused it.
+    """
+    _, _, _, reader = setup
+    snapshot = reader.load()
+    constructions = []
+    original_init = service.DashboardReadService.__init__
+
+    def counted(self, config=None, **kwargs):
+        constructions.append(config)
+        original_init(self, config, **kwargs)
+
+    monkeypatch.setattr(service.DashboardReadService, "__init__", counted)
+    monkeypatch.setattr(service.DashboardReadService, "load", lambda self: snapshot)
+    with pytest.raises(RuntimeError):
+        with real_mode_boundary(monkeypatch):
+            failing = AppTest.from_file(APP).run(timeout=20)
+            assert len(failing.dataframe) == 4 and len(constructions) == 1
+            raise RuntimeError("simulated mid-test failure")
+    app = AppTest.from_file(APP).run(timeout=20)
+    assert not app.exception and len(app.dataframe) == 4
+    assert len(constructions) == 2  # the boundary dropped the cache, so it was rebuilt
+
+
+def test_demo_then_real_sessions_do_not_leak_into_each_other(setup, monkeypatch):
+    """Session order cannot decide the outcome when every render crosses the boundary."""
+    _, _, _, reader = setup
+    snapshot = reader.load()
+    monkeypatch.setattr(service.DashboardReadService, "load", lambda self: snapshot)
+    with real_mode_boundary(monkeypatch):
+        monkeypatch.setenv(DEMO_MODE_ENV_VAR, DEMO_MODE_VALUE)
+        demo = AppTest.from_file(APP).run(timeout=30)
+    assert not demo.exception
+    assert demo.selectbox(key="period").options == dashboard_app.DEMO_PERIOD_OPTIONS
+    assert len(demo.dataframe) == 4
+    with real_mode_boundary(monkeypatch):
+        assert os.environ.get(DEMO_MODE_ENV_VAR) is None  # the boundary, not the shell
+        real = AppTest.from_file(APP).run(timeout=20)
+    assert not real.exception
+    assert real.selectbox(key="period").options == dashboard_app.REAL_PERIOD_OPTIONS
+    assert any("Gold version: 3" in caption.value for caption in real.caption)
