@@ -9,6 +9,39 @@
 
 ---
 
+## See it in 60 seconds
+
+This is a real-time order/revenue analytics platform: order events flow through
+Kafka → Spark Structured Streaming → a Bronze/Silver/Gold data lake → PostgreSQL/Redis
+→ a live Streamlit dashboard with anomaly alerting and observability. You can see
+the dashboard **without any of that infrastructure** using the built-in synthetic
+demo — a fixed, clearly-labelled sample dataset rendered through the real read and
+render path.
+
+📸 _Fixed synthetic demo (the default, no services required):_
+
+![Order Intelligence synthetic demo dashboard](docs/assets/dashboard_synthetic_demo.png)
+
+🎞️ _Optional scripted replay (the same page stepping through four predefined
+synthetic snapshots — still 100% synthetic, not live ingestion):_
+
+![Scripted synthetic replay of the dashboard](docs/assets/dashboard_scripted_replay.gif)
+
+Fastest look (from the repository root, after the demo setup below — no Docker,
+Kafka, Spark, PostgreSQL or Redis):
+
+```bash
+python -m dashboard.demo
+```
+
+Both images show **synthetic demo data**, not a live production pipeline; the
+dashboard itself states this on every view. See the
+[Synthetic demo](#synthetic-demo-no-infrastructure-required) section for the exact
+Python 3.11 launch steps and the fixed-vs-scripted distinction, and the sections
+below for the full architecture, testing and provenance details.
+
+---
+
 ## What this project is
 
 This platform replicates the real-time order processing pipeline used by companies like Flipkart, Swiggy, and Amazon — ingesting order lifecycle events through Kafka, processing them with Spark Structured Streaming, storing them in a three-layer data lake (Bronze/Silver/Gold) on MinIO, computing business KPIs into PostgreSQL, and surfacing them on a live Streamlit dashboard with statistical anomaly detection.
@@ -180,26 +213,43 @@ volumes; stop any separately started application processes as well.
 
 The same Streamlit page can be shown without Kafka, Spark, MinIO, PostgreSQL,
 Redis, Docker, cloud services, credentials or a `.env` file. Selection is
-explicit and happens in the application layer:
+explicit and happens in the application layer.
+
+> **Tested interpreter:** Python **3.11** (verified with 3.11.9 against the pinned
+> `requirements-demo.txt`). Other versions, including Python 3.14, have **not**
+> been validated by this audit — this is not a claim that they fail, only that
+> 3.11 is the version confirmed to work.
+
+Create a Python 3.11 virtual environment from the repository root and install the
+minimal demo dependencies (the examples below invoke the venv interpreter
+directly, so no activation step is required):
 
 ```powershell
-# PowerShell (Windows) — from the repository root
-python -m venv .venv                     # same interpreter the full setup uses
-.\.venv\Scripts\Activate.ps1             # Unix: source .venv/bin/activate
+# Windows PowerShell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-demo.txt
+.\.venv\Scripts\python.exe -m dashboard.demo
+```
+
+```bash
+# Bash/Zsh (macOS/Linux)
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements-demo.txt
 python -m dashboard.demo
 ```
 
+`python -m dashboard.demo` is the one-command launcher. The equivalent explicit
+selection (identical result, useful if you prefer to call Streamlit directly) is:
+
 ```bash
 # Bash/Zsh, equivalent explicit selection
-pip install -r requirements-demo.txt
 OIP_DEMO_MODE=synthetic python -m streamlit run dashboard/app.py
 ```
 
 ```powershell
 # PowerShell (Windows), equivalent explicit selection
-pip install -r requirements-demo.txt
-$env:OIP_DEMO_MODE = "synthetic"; python -m streamlit run dashboard/app.py
+$env:OIP_DEMO_MODE = "synthetic"; .\.venv\Scripts\python.exe -m streamlit run dashboard/app.py
 ```
 
 `python -m dashboard.demo` sets `OIP_DEMO_MODE=synthetic` for the Streamlit
@@ -436,6 +486,13 @@ shipped here and are not setup prerequisites.
 
 ---
 ## Prerequisites
+
+**Full-pipeline prerequisites — not required for the synthetic dashboard demo.**
+The table below lists what the complete Kafka → Spark → MinIO → PostgreSQL →
+Redis → observability stack needs. To run only the
+[synthetic demo](#synthetic-demo-no-infrastructure-required) (fixed or scripted
+mode) you need just Python 3.11 and `requirements-demo.txt` — no Docker, Java,
+Make, Kafka, Spark, PostgreSQL or Redis. Git is only needed to clone the repo.
 
 | Requirement   | Minimum version | Check                     |
 |---------------|----------------|---------------------------|
