@@ -232,17 +232,66 @@ hand-made snapshot. `source_schema`, `source_database`, `serving_status` and
 `manifest_digest`/`snapshot_identity` values are fixed-label placeholders, not
 content digests.
 
-**Boundaries.** `OIP_DEMO_MODE` must be unset or empty (real sources), or exactly
-`synthetic` (demo). Any other value stops the page with a configuration error
-before any real client is constructed, and there is no fallback in either
-direction: demo mode never reads or writes Redis/PostgreSQL, and real mode never
-renders synthetic rows. Ordinary real-mode operation is unchanged — see
+**Scripted synthetic replay (optional).** `OIP_DEMO_MODE=scripted` renders the
+same page over a finite, predefined sequence of four synthetic snapshots so a
+viewer immediately sees the analytics change, without any live pipeline:
+
+```bash
+# Bash/Zsh — from the repository root, minimal demo environment
+OIP_DEMO_MODE=scripted python -m streamlit run dashboard/app.py
+```
+
+```powershell
+# PowerShell (Windows)
+$env:OIP_DEMO_MODE = "scripted"; python -m streamlit run dashboard/app.py
+```
+
+Stop it by closing the terminal (`Ctrl+C`) or the browser tab, exactly like the
+fixed demo. The replay is still 100% synthetic and constructs no Redis or
+PostgreSQL client; it exercises the read/validate/render path over a scripted
+sequence and deliberately does not exercise live ingestion, Spark or serving
+writes.
+
+- *What it replays*: the same fixed synthetic revenue ledger, revealed one
+  minute at a time. Step *i* commits revenue minute *i* on top of the previous
+  steps and recomputes the shared five-minute product window from the ledger
+  seen so far — mirroring the Gold contract's revisable full-history snapshots.
+  Every step's product totals tie exactly to that step's revenue rows, and each
+  step survives the same wire round trip and M6 validation as the fixed sample.
+- *Progression*: the active step advances by one for every full
+  `DASHBOARD_REFRESH_SECONDS` (default 10 s) elapsed since the replay opened,
+  carried by the existing `st.fragment(run_every=…)` display refresh — no extra
+  thread, timer, service or randomness.
+- *Final step*: the sequence stops on step 4 of 4 and stays there; it never
+  loops. A visible message states this.
+- *Reset*: the **Restart replay** button re-anchors the sequence and returns to
+  step 1.
+- *Stability*: manual reruns and filter interactions never skip a step, because
+  the step derives from elapsed time, not from rerun counts. Currency/region
+  filters, date-range validation, null rendering and the insight recompute all
+  behave per step exactly as in fixed demo mode.
+- *Honesty*: a persistent banner reads
+  `Scripted synthetic replay — predefined sample snapshots; not live production data.`,
+  each rerun labels the active step (`Replay step n of 4`) with its scripted
+  `served_at`, and the provenance expander states that no source was read. The
+  fixed mode keeps its own `Synthetic demo data — not a live pipeline.` banner.
+
+**Boundaries.** `OIP_DEMO_MODE` must be unset or empty (real sources), exactly
+`synthetic` (fixed demo) or exactly `scripted` (scripted replay). Any other
+value stops the page with a configuration error before any real client is
+constructed, and there is no fallback in either direction: the synthetic modes
+never read or write Redis/PostgreSQL, and real mode never renders synthetic or
+replay rows. Ordinary real-mode operation is unchanged — see
 [Setup](#setup) for the full local pipeline.
 
 **Testing the demo without infrastructure.** The demo suite runs in the minimal
 environment above alone:
 `python -m pytest tests/unit/test_dashboard_demo.py` (34 tests, no services, no
-credentials, no `.env`). The existing real-mode suites additionally require the
+credentials, no `.env`). The replay suite is equally self-contained:
+`python -m pytest tests/unit/test_dashboard_replay.py` (42 tests) pins the
+predefined snapshot sequence, the pure clock progression (final-step clamp, no
+looping, restart) and the rendered step/filter behavior by injecting a manual
+clock — no test sleeps. The existing real-mode suites additionally require the
 full `requirements.txt`, because `tests/unit/test_dashboard.py` imports
 `scripts.verify_milestone5`, which imports `psycopg2`.
 
@@ -631,10 +680,10 @@ currency-free KPI summaries and float conversion are incompatible with M5.
 
 ## Testing and verification
 
-`tests/` collects **263 tests** in two materially different tiers. `python -m
-pytest tests/ --collect-only -q` collects all 263 with no collection errors.
+`tests/` collects **305 tests** in two materially different tiers. `python -m
+pytest tests/ --collect-only -q` collects all 305 with no collection errors.
 
-**Self-contained suites (147 collected)** — run by `python main.py verify` and by CI:
+**Self-contained suites (189 collected)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
@@ -643,13 +692,14 @@ pytest tests/ --collect-only -q` collects all 263 with no collection errors.
 | `tests/unit/test_dashboard.py` (39) | M6 read contract, Streamlit render | none |
 | `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
 | `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
+| `tests/unit/test_dashboard_replay.py` (42) | scripted synthetic replay: predefined snapshots, clock progression, render/filters, disclosure | none |
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
 | `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
 
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (146 therefore actually execute on Linux).
+is intentionally not published (188 therefore actually execute on Linux).
 
 **Windows Spark prerequisites.** The two local-Spark suites need Java 17 and a
 Python worker executable. `tests/conftest.py` pins `PYSPARK_PYTHON` /
@@ -687,17 +737,20 @@ they are historical evidence, not results any host reproduces by default.
 
 The self-contained tier was **freshly re-executed for this release** on
 2026-10-10 (Windows host, Python 3.11, Java 17, `HADOOP_HOME` unset). `python
-main.py verify` produced **143 passed, 4 skipped, 0 failed** — the four skips
-are the one M9 baseline-integrity self-skip and the three Windows `winutils.exe`
-local-filesystem Gold persistence tests described above. Independently, `pytest
-tests/unit/test_gold.py` produced **16 passed, 3 skipped, 0 failed**, and
-`pytest tests/unit/test_milestone2.py` **7 passed** — the earlier Windows-only
-`Cannot run program "python3"` breakage of a direct pytest run is resolved by the
-`conftest.py` interpreter pin. No assertion was weakened and no Gold test was
-removed from the run set: on Linux (all 146 runnable execute, 1 M9 self-skip)
-the tier is expected to be **145 passed, 1 skipped, 0 failed**, but the GitHub
-Actions workflow **has not yet run** — Actions results exist only after an
-authorized push.
+main.py verify` produced **185 passed, 4 skipped, 0 failed** across the 189
+collected tests — the four skips are the one M9 baseline-integrity self-skip and
+the three Windows `winutils.exe` local-filesystem Gold persistence tests
+described above. Independently, `pytest tests/unit/test_gold.py` produced **16
+passed, 3 skipped, 0 failed**, `pytest tests/unit/test_milestone2.py` **7
+passed**, `pytest tests/unit/test_dashboard_replay.py` **42 passed**, and the
+three pre-existing dashboard/verify suites together **98 passed** — the earlier
+Windows-only `Cannot run program "python3"` breakage of a direct pytest run is
+resolved by the `conftest.py` interpreter pin. No assertion was weakened and no
+Gold test was removed from the run set: on Linux the three winutils-gated tests
+execute, so the tier is expected to be **188 passed, 1 skipped, 0 failed**.
+GitHub Actions `unit-tests` **succeeded** on `ubuntu-latest` for the immediate
+predecessor commit `a93bc1d` (run #3, tier 147 as it stood before the replay
+suite); the Actions result for this commit lands after its push.
 
 ---
 

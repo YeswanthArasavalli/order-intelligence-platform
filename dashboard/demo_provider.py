@@ -44,8 +44,10 @@ from storage.postgres_redis_serving import TABLES, _decode, _digest, _fields, _r
 
 DEMO_MODE_ENV_VAR = "OIP_DEMO_MODE"
 DEMO_MODE_VALUE = "synthetic"
+REPLAY_MODE_VALUE = "scripted"
 MODE_REAL = "real"
 MODE_DEMO = "demo"
+MODE_REPLAY = "replay"
 MODE_INVALID = "invalid"
 
 DEMO_SOURCE_LABEL = "Synthetic demo data"
@@ -108,23 +110,28 @@ _PRODUCT_SPEC = (
 def selected_mode(value: str | None = None) -> str:
     """Classify the demo flag without touching any data source.
 
-    Unset or empty means real mode; exactly ``synthetic`` means demo mode; any
-    other value is invalid and must stop the application before real clients
-    are constructed. Whitespace and case variants are invalid, not real mode.
+    Unset or empty means real mode; exactly ``synthetic`` means the fixed demo;
+    exactly ``scripted`` means the scripted synthetic replay (see
+    ``dashboard/replay.py``); any other value is invalid and must stop the
+    application before real clients are constructed. Whitespace and case
+    variants are invalid, not real mode.
     """
     if value is None:
         value = os.environ.get(DEMO_MODE_ENV_VAR)
     if value is None or value == "":
         return MODE_REAL
-    return MODE_DEMO if value == DEMO_MODE_VALUE else MODE_INVALID
+    if value == DEMO_MODE_VALUE:
+        return MODE_DEMO
+    return MODE_REPLAY if value == REPLAY_MODE_VALUE else MODE_INVALID
 
 
 def mode_error_message(value: str | None = None) -> str:
     """Configuration error text for an unusable ``OIP_DEMO_MODE`` value."""
     if value is None:
         value = os.environ.get(DEMO_MODE_ENV_VAR)
-    return (f"Invalid {DEMO_MODE_ENV_VAR}={value!r}: expected empty (real pipeline sources) "
-            f"or exactly {DEMO_MODE_VALUE!r} (synthetic demo). No data source was initialized.")
+    return (f"Invalid {DEMO_MODE_ENV_VAR}={value!r}: expected empty (real pipeline sources), exactly "
+            f"{DEMO_MODE_VALUE!r} (fixed synthetic demo) or exactly {REPLAY_MODE_VALUE!r} "
+            f"(scripted synthetic replay). No data source was initialized.")
 
 
 def demo_config() -> DashboardConfig:

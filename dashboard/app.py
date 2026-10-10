@@ -5,6 +5,9 @@ From the project root, with environment loaded:
 
 With ``OIP_DEMO_MODE=synthetic`` the same page renders the fixed synthetic demo
 sample instead; see ``dashboard/demo_provider.py`` and ``python -m dashboard.demo``.
+With ``OIP_DEMO_MODE=scripted`` it renders the scripted synthetic replay: a
+finite predefined snapshot sequence that advances on the refresh clock; see
+``dashboard/replay.py``.
 """
 
 import atexit
@@ -15,8 +18,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from dashboard.demo_provider import (DEMO_DISCLOSURE, MODE_DEMO, MODE_INVALID, demo_config, mode_error_message,
-                                     selected_mode, synthetic_snapshot)
+from dashboard import replay as replay_provider
+from dashboard.demo_provider import (DEMO_DISCLOSURE, MODE_DEMO, MODE_INVALID, MODE_REAL, MODE_REPLAY, demo_config,
+                                     mode_error_message, selected_mode, synthetic_snapshot)
 from dashboard.read_service import (
     DashboardConfig, DashboardReadService, DashboardUnavailable, display_rows,
     filter_rows, format_money,
@@ -28,6 +32,14 @@ from storage.postgres_redis_serving import TABLES
 # legitimately select zero rows and the clock is not part of the demo output.
 REAL_PERIOD_OPTIONS = ["All snapshot windows", "Last 30 minutes (UTC now)", "Custom UTC range"]
 DEMO_PERIOD_OPTIONS = ["All synthetic sample windows", "Custom UTC range"]
+
+# One-line framing under the title, per mode, so a first-time reader knows in
+# seconds what this page is and where the numbers come from.
+MODE_SUBTITLES = {
+    MODE_REAL: "Real-time order analytics: the streaming pipeline serves these figures from PostgreSQL/Redis.",
+    MODE_DEMO: "Interactive order-analytics dashboard, demonstrated on a fixed synthetic sample.",
+    MODE_REPLAY: "Interactive order-analytics dashboard, demonstrated on a scripted sequence of synthetic snapshots.",
+}
 
 
 @st.cache_resource
@@ -121,11 +133,24 @@ def display_frame(rows, table):
     return pd.DataFrame(display_rows(rows), columns=list(TABLES[table]))
 
 
-def render(config, demo):
+def render(config, demo, replay=False):
     if not demo:
         st.button("Refresh snapshot", key="refresh")
+    step = None
+    if replay:
+        # The replay step is derived from elapsed time, so fragment reruns
+        # (auto ticks, filter interactions, manual runs) never skip ahead.
+        if st.button("Restart replay", key="replay_restart"):
+            st.session_state["replay_started_at"] = replay_provider.now()
+        started = st.session_state.setdefault("replay_started_at", replay_provider.now())
+        step = replay_provider.advance_index(started, config.refresh_seconds)
     try:
-        snapshot = synthetic_snapshot(config) if demo else get_read_service(config).load()
+        if replay:
+            snapshot = replay_provider.replay_snapshot(config, step)
+        elif demo:
+            snapshot = synthetic_snapshot(config)
+        else:
+            snapshot = get_read_service(config).load()
     except DashboardUnavailable as exc:
         st.error(str(exc))
         st.info("No analytical values are displayed. Retry when a valid source is available.")
@@ -137,8 +162,16 @@ def render(config, demo):
                    f"Synthetic gold version: {snapshot.metadata['gold_version']} | "
                    f"Synthetic topic: {snapshot.metadata['source_topic']} | "
                    f"Contract status field: {snapshot.metadata['serving_status']}")
-        st.caption(f"Synthetic served_at (fixed sample timestamp, not a live serve): {snapshot.metadata['served_at']}")
-        st.caption("No Redis or PostgreSQL source was read; every value below comes from the committed synthetic sample.")
+        if replay:
+            st.caption(f"Replay step {step + 1} of {replay_provider.REPLAY_STEP_COUNT} — predefined snapshot "
+                       f"served_at (scripted timestamp, not a live serve): {snapshot.metadata['served_at']}")
+            st.caption("No Redis or PostgreSQL source was read; every value below comes from the scripted "
+                       "synthetic replay sequence and changes only as that sequence advances.")
+            if step == replay_provider.REPLAY_STEP_COUNT - 1:
+                st.info(replay_provider.REPLAY_FINISHED_MESSAGE)
+        else:
+            st.caption(f"Synthetic served_at (fixed sample timestamp, not a live serve): {snapshot.metadata['served_at']}")
+            st.caption("No Redis or PostgreSQL source was read; every value below comes from the committed synthetic sample.")
     else:
         st.caption(f"PostgreSQL source: {snapshot.metadata['source_schema']} | Gold version: {snapshot.metadata['gold_version']} | "
                    f"Source topic: {snapshot.metadata['source_topic']} | Status: {snapshot.metadata['serving_status']}")
@@ -147,12 +180,16 @@ def render(config, demo):
             st.info("Showing the cached source version. Current PostgreSQL freshness/availability has not been checked.")
         else:
             st.warning(f"Redis {snapshot.redis_status}; showing the authoritative PostgreSQL snapshot read for this refresh.")
-    with st.expander("Snapshot provenance (synthetic)" if demo else "Snapshot provenance"):
+    with st.expander("Snapshot provenance (synthetic replay)" if replay else
+                     "Snapshot provenance (synthetic)" if demo else "Snapshot provenance"):
         if demo:
-            # read_service's freshness wording describes live sources; demo provenance
+            # read_service's freshness wording describes live sources; synthetic provenance
             # states the real boundary instead of inheriting that claim.
-            st.json({**snapshot.provenance, "freshness": "Fixed synthetic sample; no source was read at any time",
-                     "redis_namespace": "not used (demo mode constructs no Redis client)"})
+            freshness = ("Predefined replay snapshots; no source was read at any time" if replay
+                         else "Fixed synthetic sample; no source was read at any time")
+            namespace = ("not used (replay mode constructs no Redis client)" if replay
+                         else "not used (demo mode constructs no Redis client)")
+            st.json({**snapshot.provenance, "freshness": freshness, "redis_namespace": namespace})
         else:
             st.json(snapshot.provenance)
     if snapshot.empty:
@@ -213,7 +250,9 @@ def render(config, demo):
                                  index=len(revenue) - 1,
                                  format_func=lambda i, rows=revenue, currency=code: f"{rows[i]['window_start'].isoformat()} — "
                                                        f"{rows[i]['window_end'].isoformat()} / {rows[i]['region']} / {currency}",
-                                 key="kpi_" + code)
+                                 # Replay re-keys the widget per step so the default (latest committed window)
+                                 # tracks the advancing snapshot instead of pinning a stale step-1 selection.
+                                 key="kpi_" + code if not replay else f"kpi_{code}_step{step}")
             row = revenue[index]
             a, b, c = st.columns(3)
             a.metric(f"Net revenue — {code}", format_money(row["net_revenue"], code))
@@ -250,20 +289,29 @@ def main():
         # Fail before any real-source configuration or client construction.
         st.error(mode_error_message())
         return
-    demo = mode == MODE_DEMO
+    st.caption(MODE_SUBTITLES[mode])
+    replay = mode == MODE_REPLAY
+    demo = mode == MODE_DEMO or replay
     try:
         config = demo_config() if demo else DashboardConfig.from_env()
     except ValueError:
         st.error("Invalid dashboard configuration. Check source schema, Redis namespace, currency and refresh interval.")
         return
-    if demo:
+    if replay:
+        st.warning(replay_provider.REPLAY_DISCLOSURE)
+        st.caption(f"Scripted replay steps through {replay_provider.REPLAY_STEP_COUNT} predefined synthetic "
+                   f"snapshots, advancing one snapshot every {config.refresh_seconds}s on the display refresh. "
+                   "KPIs, chart, tables and insights always describe the active snapshot; nothing here queries "
+                   "Kafka, Spark, PostgreSQL or Redis.")
+    elif demo:
         st.warning(DEMO_DISCLOSURE)
         st.caption(f"Demo display refresh: {config.refresh_seconds}s. The synthetic sample is fixed; "
                    "refreshing re-renders identical values and never queries a source.")
     else:
         st.caption(f"Snapshot display refresh: {config.refresh_seconds}s. PostgreSQL is authoritative; Redis is a disposable cache.")
     # Streamlit fragment refresh replaces the previous blocking sleep/rerun loop.
-    st.fragment(run_every=config.refresh_seconds)(render)(config, demo)
+    # In replay mode the same run_every reruns carry the scripted progression.
+    st.fragment(run_every=config.refresh_seconds)(render)(config, demo, replay)
 
 
 if __name__ == "__main__":

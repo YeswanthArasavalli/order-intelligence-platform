@@ -1,10 +1,12 @@
 # =============================================================================
 # Order Intelligence Platform — synthetic dashboard demo dependencies
 # =============================================================================
-# Only what `python -m dashboard.demo` and `tests/unit/test_dashboard_demo.py`
-# import directly. The full pipeline stack (PySpark, confluent-kafka, boto3,
-# psycopg2, faker, Prometheus) is intentionally absent: demo mode constructs no
-# Kafka/Spark/MinIO/PostgreSQL/Redis client.
+# Only what `python -m dashboard.demo`, the synthetic/scripted demo modes of
+# dashboard/app.py, and `tests/unit/test_dashboard_demo.py` /
+# `tests/unit/test_dashboard_replay.py` import directly. The full pipeline stack
+# (PySpark, confluent-kafka, boto3, psycopg2, faker, Prometheus) is intentionally
+# absent: demo and replay modes construct no Kafka/Spark/MinIO/PostgreSQL/Redis
+# client.
 # Versions match requirements.txt so demo and full installs stay compatible.
 # Install: pip install -r requirements-demo.txt
 # =============================================================================
