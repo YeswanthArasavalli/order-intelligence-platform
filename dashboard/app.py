@@ -21,6 +21,7 @@ from dashboard.read_service import (
     DashboardConfig, DashboardReadService, DashboardUnavailable, display_rows,
     filter_rows, format_money,
 )
+from storage.postgres_redis_serving import TABLES
 
 # Real mode keeps its historical options. The demo replaces the clock-based
 # option: the fixed sample is anchored in the past, so "now" filtering would
@@ -103,6 +104,21 @@ def currency_insights(revenue, products, currency, region=None):
                       f"{top['units_sold']} paid events"))
         lines.append((f"Paid product events in view (all regions, {len(products)} product rows)", str(sum(row["units_sold"] for row in products))))
     return lines
+
+
+def display_frame(rows, table):
+    """Render a table in the M4/M5 contract column order instead of alphabetical.
+
+    ``pd.DataFrame(list_of_dicts)`` sorts the union of keys alphabetically, which
+    pushed the two wide window-boundary timestamps to the far right so the 1440px
+    viewport clipped ``window_end``. Building the frame with the contract's explicit
+    ``columns`` keeps ``window_start``/``window_end`` as the leading, always-visible
+    identity columns. Every field and value is preserved (no truncation, rounding or
+    removal); the remaining columns stay reachable through the grid's horizontal
+    scroll. This is a supported Streamlit/pandas presentation adjustment, not a CSS
+    override.
+    """
+    return pd.DataFrame(display_rows(rows), columns=list(TABLES[table]))
 
 
 def render(config, demo):
@@ -205,14 +221,14 @@ def render(config, demo):
             c.metric(f"Average order value — {code}", format_money(row["avg_order_value"], code))
             st.plotly_chart(revenue_chart(revenue, code), use_container_width=True)
             st.caption("Plot positions are approximate; hover text and the table retain exact eight-place amounts.")
-            st.dataframe(pd.DataFrame(display_rows(revenue)), use_container_width=True, hide_index=True)
+            st.dataframe(display_frame(revenue, "revenue_by_minute"), use_container_width=True, hide_index=True)
         else:
             st.info(f"No revenue rows match these filters for {code}; this is not a zero-revenue assertion.")
         st.subheader(f"Products — {code}")
         products = [r for r in filtered["product_rankings"] if r["currency"] == code]
         if products:
             st.caption("Stored product/window rows; IDs, names and window boundaries remain distinct.")
-            st.dataframe(pd.DataFrame(display_rows(products)), use_container_width=True, hide_index=True)
+            st.dataframe(display_frame(products, "product_rankings"), use_container_width=True, hide_index=True)
         else:
             st.info(f"No product rows match these filters for {code}.")
         # Phase 2C P3: currency-scoped insights recomputed from the very rows

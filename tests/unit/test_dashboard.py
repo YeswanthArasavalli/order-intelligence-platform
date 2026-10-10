@@ -257,3 +257,50 @@ def test_streamlit_empty_and_error_are_distinct(setup, monkeypatch, empty):
     assert bool(app.error) is not empty
     if empty:
         assert any("Valid empty committed snapshot" in i.value for i in app.info)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3B regression: table layout (window_end accessibility) and null display
+# ---------------------------------------------------------------------------
+
+def test_display_rows_renders_null_as_em_dash_and_preserves_values():
+    row = {"avg_order_value": None, "net_revenue": Decimal("0"), "gross_revenue": Decimal("1234.5")}
+    display = service.display_rows([row])[0]
+    # A null renders as an em dash, never the raw Python "None".
+    assert display["avg_order_value"] == service.NULL_DISPLAY == "\u2014"
+    # A genuine zero stays a zero and remains distinguishable from null.
+    assert display["net_revenue"] == "0.00000000"
+    # Ordinary positive money keeps the established eight-place precision.
+    assert display["gross_revenue"] == "1234.50000000"
+    # The presentation transform never mutates the underlying source value.
+    assert row["avg_order_value"] is None
+
+
+def test_streamlit_tables_lead_with_window_columns_and_render_null_dash(setup, monkeypatch):
+    """Layout + null regression through the real render path.
+
+    These assertions cover the *mechanism* that keeps ``window_end`` accessible at
+    1440px (it is a leading, left-anchored column rather than the clipped rightmost
+    one) and the null-cell presentation. Actual pixel/DOM confirmation at 1440x900
+    and 1920x1080 is done separately with the headless-Chrome QA driver, not here.
+    """
+    _, _, _, reader = setup
+    snapshot = reader.load()
+    monkeypatch.setattr(service.DashboardReadService, "load", lambda self: snapshot)
+    monkeypatch.setenv("POSTGRES_GOLD_SCHEMA", "gold_serving")
+    app = AppTest.from_file(APP).run(timeout=20)
+    assert not app.exception and not app.error
+
+    revenue_frame = app.dataframe[0].value  # INR revenue table
+    # window_end is present and is a leading column, so the viewport cannot clip it.
+    assert "window_end" in revenue_frame.columns
+    assert list(revenue_frame.columns[:2]) == ["window_start", "window_end"]
+    # The fixture's null avg_order_value renders as an em dash, not "None"; a real
+    # value in the same column keeps eight-place precision.
+    avg_cells = set(revenue_frame["avg_order_value"])
+    assert service.NULL_DISPLAY in avg_cells and "None" not in avg_cells
+    assert "100.00000000" in avg_cells
+
+    # The product table shared the same root cause and received the same fix.
+    product_frame = app.dataframe[1].value
+    assert list(product_frame.columns[:2]) == ["window_start", "window_end"]

@@ -197,10 +197,23 @@ def filter_rows(snapshot: DashboardSnapshot, *, currency=None, region=None, star
     }
 
 
+# Presentation-only glyph for a null analytical value. The Gold contract lets
+# avg_order_value be null (no applicable paid events); a raw Python ``None`` in an
+# Arrow cell reads like an application bug, so it is shown as an em dash instead.
+NULL_DISPLAY = "\u2014"
+
+
 def display_rows(rows):
-    """Keep exact money in Streamlit/Arrow tables; avoid implicit numeric coercion."""
+    """Keep exact money in Streamlit/Arrow tables; avoid implicit numeric coercion.
+
+    Nulls render as ``NULL_DISPLAY`` for presentation only: the underlying row value
+    stays null, and a genuine zero still formats as ``0.00000000``, so a null cell is
+    never confused with a zero. This is the narrowest display boundary shared by every
+    rendered table; it changes no arithmetic, serialization or persisted data.
+    """
     return [{k: (format(v, ".8f") if isinstance(v, Decimal) else
-                 v.isoformat(timespec="microseconds") if isinstance(v, datetime) else v)
+                 v.isoformat(timespec="microseconds") if isinstance(v, datetime) else
+                 NULL_DISPLAY if v is None else v)
              for k, v in row.items()} for row in rows]
 
 
