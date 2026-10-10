@@ -1,0 +1,17 @@
+# =============================================================================
+# Order Intelligence Platform — synthetic dashboard demo dependencies
+# =============================================================================
+# Only what `python -m dashboard.demo` and `tests/unit/test_dashboard_demo.py`
+# import directly. The full pipeline stack (PySpark, confluent-kafka, boto3,
+# psycopg2, faker, Prometheus) is intentionally absent: demo mode constructs no
+# Kafka/Spark/MinIO/PostgreSQL/Redis client.
+# Versions match requirements.txt so demo and full installs stay compatible.
+# Install: pip install -r requirements-demo.txt
+# =============================================================================
+
+streamlit==1.40.1               # dashboard/app.py, dashboard/demo.py
+plotly==5.24.1                  # revenue charts
+pandas==2.2.3                   # Streamlit tables
+sqlalchemy==2.0.36              # imported by storage.postgres_redis_serving (no engine is built)
+redis==5.2.0                    # imported by the read contract (no client is built)
+pytest==8.3.3                   # demo test suite

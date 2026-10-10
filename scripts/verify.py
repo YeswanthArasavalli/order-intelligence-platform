@@ -8,6 +8,8 @@ PostgreSQL, Redis are never contacted):
 - ``tests/unit/test_milestone2.py``   DQ/Silver/DLQ checks on local Spark
 - ``tests/unit/test_gold.py``         Gold aggregation on local Parquet/manifests
 - ``tests/unit/test_dashboard.py``    M6 read-contract and Streamlit-render checks
+- ``tests/unit/test_dashboard_demo.py`` synthetic demo mode contract/render checks
+- ``tests/unit/test_dashboard_phase2c.py`` Phase 2C filter-interaction and data-derived insight checks
 - ``tests/unit/test_observability.py`` M9 metrics/protocol checks on loopback HTTP
 - ``tests/unit/test_verify.py``       tests for this dispatcher itself
 
@@ -36,6 +38,8 @@ SELF_CONTAINED_SUITES: tuple[str, ...] = (
     "tests/unit/test_milestone2.py",
     "tests/unit/test_gold.py",
     "tests/unit/test_dashboard.py",
+    "tests/unit/test_dashboard_demo.py",
+    "tests/unit/test_dashboard_phase2c.py",
     "tests/unit/test_observability.py",
     "tests/unit/test_verify.py",
 )

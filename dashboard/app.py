@@ -2,19 +2,31 @@
 
 From the project root, with environment loaded:
     python -m streamlit run dashboard/app.py
+
+With ``OIP_DEMO_MODE=synthetic`` the same page renders the fixed synthetic demo
+sample instead; see ``dashboard/demo_provider.py`` and ``python -m dashboard.demo``.
 """
 
 import atexit
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from dashboard.demo_provider import (DEMO_DISCLOSURE, MODE_DEMO, MODE_INVALID, demo_config, mode_error_message,
+                                     selected_mode, synthetic_snapshot)
 from dashboard.read_service import (
     DashboardConfig, DashboardReadService, DashboardUnavailable, display_rows,
     filter_rows, format_money,
 )
+
+# Real mode keeps its historical options. The demo replaces the clock-based
+# option: the fixed sample is anchored in the past, so "now" filtering would
+# legitimately select zero rows and the clock is not part of the demo output.
+REAL_PERIOD_OPTIONS = ["All snapshot windows", "Last 30 minutes (UTC now)", "Custom UTC range"]
+DEMO_PERIOD_OPTIONS = ["All synthetic sample windows", "Custom UTC range"]
 
 
 @st.cache_resource
@@ -41,25 +53,92 @@ def revenue_chart(rows, currency):
     return figure
 
 
-def render(config):
-    st.button("Refresh snapshot", key="refresh")
+def currency_insights(revenue, products, currency, region=None):
+    """Phase 2C P3: currency-scoped insight lines recomputed from the filtered rows.
+
+    Money is never summed across currencies and every figure uses the same exact
+    Decimal arithmetic the tables render with, so an insight can never disagree
+    with a number shown above it. An empty selection simply yields no lines.
+
+    Phase 2C fixes: ``order_count``/``units_sold`` are PAID-EVENT counts
+    (GOLD_CONTRACT), not distinct orders or physical quantities, so the labels say
+    "events". The product schema has no region dimension, so product lines are
+    always all-region while revenue lines honour the active ``region`` filter; the
+    two scopes are labelled separately and never implied to coincide. Leading-region
+    ties break deterministically on the ascending region name.
+    """
+    lines = []
+    revenue_scope = f"region {region}" if region else "all regions"
+    if revenue:
+        regions = {}
+        for row in revenue:
+            regions[row["region"]] = regions.get(row["region"], Decimal(0)) + row["net_revenue"]
+        lead_region, lead_net = min(regions.items(), key=lambda item: (-item[1], item[0]))
+        lines.append((f"Leading region by net revenue ({len(regions)} in view, {revenue_scope})",
+                      f"{lead_region} — {format_money(lead_net, currency)}"))
+        lines.append((f"Paid events in view (revenue rows, {revenue_scope})", str(sum(row["order_count"] for row in revenue))))
+        windows = sorted({row["window_start"] for row in revenue})
+        if len(windows) >= 2:
+            first_net = sum((r["net_revenue"] for r in revenue if r["window_start"] == windows[0]), Decimal(0))
+            last_net = sum((r["net_revenue"] for r in revenue if r["window_start"] == windows[-1]), Decimal(0))
+            delta = last_net - first_net
+            trend = "rising" if delta > 0 else "falling" if delta < 0 else "flat"
+            span = f"{windows[0].strftime('%H:%M')}\u2013{windows[-1].strftime('%H:%M')} UTC"
+            lines.append((f"Net revenue {trend} across {len(windows)} windows ({span})",
+                          f"first\u2192last change {format_money(delta, currency)}"))
+        gross = sum((row["gross_revenue"] for row in revenue), Decimal(0))
+        deducted = sum((row["refund_amount"] + row["cancellation_amount"] for row in revenue), Decimal(0))
+        if gross > 0:
+            with localcontext() as ctx:
+                ctx.prec = 80
+                rate = (deducted / gross * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            lines.append(("Combined refund + cancellation rate over gross paid (additive ledger)",
+                          f"{rate}% of gross ({format_money(deducted, currency)}) (reversals are an additive "
+                          "event ledger; a paid event may be both refunded and cancelled, so this ratio can "
+                          "exceed 100%"))
+    if products:
+        top = max(products, key=lambda r: (r["revenue"], r["product_id"]))
+        lines.append(("Top product by revenue (all regions)",
+                      f"{top['product_name']} ({top['product_id']}) \u2014 {format_money(top['revenue'], currency)}, "
+                      f"{top['units_sold']} paid events"))
+        lines.append((f"Paid product events in view (all regions, {len(products)} product rows)", str(sum(row["units_sold"] for row in products))))
+    return lines
+
+
+def render(config, demo):
+    if not demo:
+        st.button("Refresh snapshot", key="refresh")
     try:
-        snapshot = get_read_service(config).load()
+        snapshot = synthetic_snapshot(config) if demo else get_read_service(config).load()
     except DashboardUnavailable as exc:
         st.error(str(exc))
         st.info("No analytical values are displayed. Retry when a valid source is available.")
         return
 
     st.caption(f"Data source: {snapshot.source} | Redis status: {snapshot.redis_status}")
-    st.caption(f"PostgreSQL source: {snapshot.metadata['source_schema']} | Gold version: {snapshot.metadata['gold_version']} | "
-               f"Source topic: {snapshot.metadata['source_topic']} | Status: {snapshot.metadata['serving_status']}")
-    st.caption(f"PostgreSQL served_at: {snapshot.metadata['served_at']}")
-    if snapshot.source == "Redis cache":
-        st.info("Showing the cached source version. Current PostgreSQL freshness/availability has not been checked.")
+    if demo:
+        st.caption(f"Synthetic source schema (contract shape): {snapshot.metadata['source_schema']} | "
+                   f"Synthetic gold version: {snapshot.metadata['gold_version']} | "
+                   f"Synthetic topic: {snapshot.metadata['source_topic']} | "
+                   f"Contract status field: {snapshot.metadata['serving_status']}")
+        st.caption(f"Synthetic served_at (fixed sample timestamp, not a live serve): {snapshot.metadata['served_at']}")
+        st.caption("No Redis or PostgreSQL source was read; every value below comes from the committed synthetic sample.")
     else:
-        st.warning(f"Redis {snapshot.redis_status}; showing the authoritative PostgreSQL snapshot read for this refresh.")
-    with st.expander("Snapshot provenance"):
-        st.json(snapshot.provenance)
+        st.caption(f"PostgreSQL source: {snapshot.metadata['source_schema']} | Gold version: {snapshot.metadata['gold_version']} | "
+                   f"Source topic: {snapshot.metadata['source_topic']} | Status: {snapshot.metadata['serving_status']}")
+        st.caption(f"PostgreSQL served_at: {snapshot.metadata['served_at']}")
+        if snapshot.source == "Redis cache":
+            st.info("Showing the cached source version. Current PostgreSQL freshness/availability has not been checked.")
+        else:
+            st.warning(f"Redis {snapshot.redis_status}; showing the authoritative PostgreSQL snapshot read for this refresh.")
+    with st.expander("Snapshot provenance (synthetic)" if demo else "Snapshot provenance"):
+        if demo:
+            # read_service's freshness wording describes live sources; demo provenance
+            # states the real boundary instead of inheriting that claim.
+            st.json({**snapshot.provenance, "freshness": "Fixed synthetic sample; no source was read at any time",
+                     "redis_namespace": "not used (demo mode constructs no Redis client)"})
+        else:
+            st.json(snapshot.provenance)
     if snapshot.empty:
         st.info("Valid empty committed snapshot: zero revenue and product rows.")
         return
@@ -68,11 +147,18 @@ def render(config):
     default_index = currency_options.index(config.default_currency) if config.default_currency in snapshot.currencies else 0
     if config.default_currency and default_index == 0:
         st.warning(f"Configured currency {config.default_currency} is absent; showing separate currency views.")
-    currency = st.selectbox("Currency", currency_options, index=default_index, key="currency")
-    region = st.selectbox("Revenue region", [None, *sorted({r['region'] for r in snapshot.revenue_by_minute})],
-                          format_func=lambda value: "All regions" if value is None else value, key="region")
+    # Phase 2C P1: the controls sit in a labelled three-column row so the
+    # analytical content is visually separated from them. Widget keys, option
+    # lists and the custom-range parsing are unchanged from M6, so every consumer
+    # contract and render assertion still holds. st.sidebar cannot be used inside
+    # an st.fragment, so the redesign stays in the main container.
+    st.markdown("### Filters")
+    currency_col, region_col, period_col = st.columns(3)
+    currency = currency_col.selectbox("Currency", currency_options, index=default_index, key="currency")
+    region = region_col.selectbox("Revenue region", [None, *sorted({r['region'] for r in snapshot.revenue_by_minute})],
+                                  format_func=lambda value: "All regions" if value is None else value, key="region")
+    period = period_col.selectbox("Time range", DEMO_PERIOD_OPTIONS if demo else REAL_PERIOD_OPTIONS, key="period")
     st.caption("Region filters revenue only. Product snapshots have no region dimension.")
-    period = st.selectbox("Time range", ["All snapshot windows", "Last 30 minutes (UTC now)", "Custom UTC range"], key="period")
     start = end = None
     if period == "Last 30 minutes (UTC now)":
         end = datetime.now(timezone.utc)
@@ -94,6 +180,13 @@ def render(config):
         st.error(str(exc))
         return
     st.caption("Time filtering selects stored window_start in [start, end); windows are not prorated.")
+
+    # Phase 2C P3: an at-a-glance summary derived from what the selection resolved
+    # to, so the reader sees the exact row counts behind every figure below.
+    st.caption(f"Active filters \u2014 currency: {currency}, region: {region or 'all regions'}, time range: {period}")
+    st.caption(f"Matching rows \u2014 revenue: {len(filtered['revenue_by_minute'])}, "
+               f"products: {len(filtered['product_rankings'])}")
+
     currencies = snapshot.currencies if currency == currency_options[0] else [currency]
     for code in currencies:
         st.divider()
@@ -122,19 +215,39 @@ def render(config):
             st.dataframe(pd.DataFrame(display_rows(products)), use_container_width=True, hide_index=True)
         else:
             st.info(f"No product rows match these filters for {code}.")
+        # Phase 2C P3: currency-scoped insights recomputed from the very rows
+        # rendered above, surfaced as text so no KPI/table/chart count changes.
+        insights = currency_insights(revenue, products, code, region)
+        if insights:
+            with st.expander(f"Insights \u2014 {code}", expanded=False):
+                st.caption("Derived from rows matching the current filters; currency-scoped, exact Decimal "
+                           "math. Revenue honours the region filter; product lines are all-region.")
+                for label, value in insights:
+                    st.markdown(f"**{label}** \u2014 {value}")
 
 
 def main():
     st.set_page_config(page_title="Order Intelligence Platform", page_icon="📦", layout="wide")
     st.title("📦 Order Intelligence Platform")
+    mode = selected_mode()
+    if mode == MODE_INVALID:
+        # Fail before any real-source configuration or client construction.
+        st.error(mode_error_message())
+        return
+    demo = mode == MODE_DEMO
     try:
-        config = DashboardConfig.from_env()
+        config = demo_config() if demo else DashboardConfig.from_env()
     except ValueError:
         st.error("Invalid dashboard configuration. Check source schema, Redis namespace, currency and refresh interval.")
         return
-    st.caption(f"Snapshot display refresh: {config.refresh_seconds}s. PostgreSQL is authoritative; Redis is a disposable cache.")
+    if demo:
+        st.warning(DEMO_DISCLOSURE)
+        st.caption(f"Demo display refresh: {config.refresh_seconds}s. The synthetic sample is fixed; "
+                   "refreshing re-renders identical values and never queries a source.")
+    else:
+        st.caption(f"Snapshot display refresh: {config.refresh_seconds}s. PostgreSQL is authoritative; Redis is a disposable cache.")
     # Streamlit fragment refresh replaces the previous blocking sleep/rerun loop.
-    st.fragment(run_every=config.refresh_seconds)(render)(config)
+    st.fragment(run_every=config.refresh_seconds)(render)(config, demo)
 
 
 if __name__ == "__main__":

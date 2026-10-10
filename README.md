@@ -176,6 +176,94 @@ volumes; stop any separately started application processes as well.
 
 ---
 
+## Synthetic demo (no infrastructure required)
+
+The same Streamlit page can be shown without Kafka, Spark, MinIO, PostgreSQL,
+Redis, Docker, cloud services, credentials or a `.env` file. Selection is
+explicit and happens in the application layer:
+
+```powershell
+# PowerShell (Windows) — from the repository root
+python -m venv .venv                     # same interpreter the full setup uses
+.\.venv\Scripts\Activate.ps1             # Unix: source .venv/bin/activate
+pip install -r requirements-demo.txt
+python -m dashboard.demo
+```
+
+```bash
+# Bash/Zsh, equivalent explicit selection
+pip install -r requirements-demo.txt
+OIP_DEMO_MODE=synthetic python -m streamlit run dashboard/app.py
+```
+
+```powershell
+# PowerShell (Windows), equivalent explicit selection
+pip install -r requirements-demo.txt
+$env:OIP_DEMO_MODE = "synthetic"; python -m streamlit run dashboard/app.py
+```
+
+`python -m dashboard.demo` sets `OIP_DEMO_MODE=synthetic` for the Streamlit
+process and opens the dashboard in a browser; stopping that terminal stops the
+demo. Nothing is started, written or read outside the repository.
+
+**What the demo shows.** A banner states
+`Synthetic demo data — not a live pipeline.` on every view, and the captions and
+provenance label the source as synthetic. The dataset is a fixed 24-row sample
+(12 revenue rows over four one-minute windows for `north-india`/INR,
+`south-india`/INR and `international`/USD, plus 12 product rows in the covering
+five-minute window) anchored at `2026-10-05T12:00:00+00:00`. Values are derived
+with the documented Gold rules (`net = gross − refund − cancellation`,
+`avg_order_value = mean paid amount` or null) and include contract-valid edge
+cases: an unpaid-cancellation window with null average, a negative net from
+combined refund and cancellation deductions under the additive ledger,
+eight-decimal rounding at the half-up boundary and a high-value window. Per
+currency the product totals tie exactly to the revenue totals. The initial view
+selects the whole sample, so metrics, charts and tables are populated. Demo mode
+replaces the clock-based “Last 30 minutes (UTC now)” option — the sample is
+historical and the clock is deliberately not part of demo output; real mode keeps
+its original options and defaults.
+
+**Contract reuse.** `dashboard/demo_provider.py` builds rows through the M5
+serving-contract helpers (`_row`, `_digest`, `_fields`, `_decode`) and then hands
+them to the unchanged M6 validator (`read_service._typed`), so the sample is
+proven against the actual Redis wire format and consumer checks rather than a
+hand-made snapshot. `source_schema`, `source_database`, `serving_status` and
+`gold_version` are contract-shaped fields the validator requires; the
+`manifest_digest`/`snapshot_identity` values are fixed-label placeholders, not
+content digests.
+
+**Boundaries.** `OIP_DEMO_MODE` must be unset or empty (real sources), or exactly
+`synthetic` (demo). Any other value stops the page with a configuration error
+before any real client is constructed, and there is no fallback in either
+direction: demo mode never reads or writes Redis/PostgreSQL, and real mode never
+renders synthetic rows. Ordinary real-mode operation is unchanged — see
+[Setup](#setup) for the full local pipeline.
+
+**Testing the demo without infrastructure.** The demo suite runs in the minimal
+environment above alone:
+`python -m pytest tests/unit/test_dashboard_demo.py` (34 tests, no services, no
+credentials, no `.env`). The existing real-mode suites additionally require the
+full `requirements.txt`, because `tests/unit/test_dashboard.py` imports
+`scripts.verify_milestone5`, which imports `psycopg2`.
+
+**Phase 2C dashboard UX, insights and filter tests.** The dashboard is a purely
+additive redesign of the M6/demo renderer — every Phase 2B render contract still
+holds. The currency/region/time-range controls now sit in a labelled three-column
+row (kept in the main container because `st.sidebar` cannot be used inside an
+`st.fragment`), an at-a-glance caption reports the active filters and the exact
+revenue/product row counts the selection resolved to, and each currency section has
+an **Insights** expander whose lines are recomputed from the very rows shown:
+leading region by net revenue, paid orders, first→last net-revenue trend, refund +
+cancellation rate, top product by revenue and units sold. All insight figures are
+currency-scoped and use the same exact `Decimal` arithmetic as the tables, so no
+value is summed across currencies and none can disagree with the table above it.
+`python -m pytest tests/unit/test_dashboard_phase2c.py` (20 tests) covers the
+insight arithmetic against independent recomputation and drives the real Streamlit
+widgets to prove the filters genuinely change the summary and insight text; these
+run in the same minimal demo environment and are wired into `python main.py verify`.
+
+---
+
 ## Architecture
 
 ```
@@ -543,22 +631,24 @@ currency-free KPI summaries and float conversion are incompatible with M5.
 
 ## Testing and verification
 
-`tests/` collects **207 tests** in two materially different tiers.
+`tests/` collects **261 tests** in two materially different tiers.
 
-**Self-contained suites (91 tests)** — run by `python main.py verify` and by CI:
+**Self-contained suites (145 tests)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
 | `tests/unit/test_milestone2.py` (7) | DQ/Silver/DLQ logic | local in-process Spark (`local[*]`), Java 17 |
 | `tests/unit/test_gold.py` (19) | Gold aggregation, Parquet/manifest commits | same |
 | `tests/unit/test_dashboard.py` (37) | M6 read contract, Streamlit render | none |
+| `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
+| `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
 | `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
 
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (90 therefore actually execute).
+is intentionally not published (144 therefore actually execute).
 
 **Service-dependent suites (116 tests)** — not run by CI:
 
@@ -578,14 +668,14 @@ excluded from `python main.py verify`.
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
 executed inside the Linux verification container with the full local stack up;
 they are historical evidence, not results any host reproduces by default. What
-was actually executed in this public tree on 2026-10-09 (Windows 11 host,
-Python 3.11): 207 tests collected; `python main.py verify` produced
-**87 passed, 3 failed, 1 skipped** in ~8.5 minutes. The three failures are all
+was actually executed in this public tree on 2026-10-10 (Windows 11 host,
+Python 3.11): 261 tests collected; `python main.py verify` produced
+**141 passed, 3 failed, 1 skipped** in ~9.1 minutes (547 seconds). The three failures are all
 `test_gold` Parquet-write checks failing in Hadoop's Windows shell
 (`winutils.exe`/`HADOOP_HOME` absent) — a documented Spark-on-Windows
 limitation of the host, not a platform logic defect; the same tests were part
 of the passing Linux container runs. On Linux (including the CI workflow's
-`ubuntu-latest` runner) the self-contained tier is expected to execute all 90
+`ubuntu-latest` runner) the self-contained tier is expected to execute all 144
 runnable tests, but the workflow has **not yet run on GitHub**: Actions results
 exist only after an authorized push.
 
