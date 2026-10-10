@@ -631,15 +631,15 @@ currency-free KPI summaries and float conversion are incompatible with M5.
 
 ## Testing and verification
 
-`tests/` collects **261 tests** in two materially different tiers.
+`tests/` collects **263 tests** in two materially different tiers.
 
-**Self-contained suites (145 tests)** — run by `python main.py verify` and by CI:
+**Self-contained suites (147 tests)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
 | `tests/unit/test_milestone2.py` (7) | DQ/Silver/DLQ logic | local in-process Spark (`local[*]`), Java 17 |
 | `tests/unit/test_gold.py` (19) | Gold aggregation, Parquet/manifest commits | same |
-| `tests/unit/test_dashboard.py` (37) | M6 read contract, Streamlit render | none |
+| `tests/unit/test_dashboard.py` (39) | M6 read contract, Streamlit render | none |
 | `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
 | `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
@@ -648,7 +648,7 @@ currency-free KPI summaries and float conversion are incompatible with M5.
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (144 therefore actually execute).
+is intentionally not published (146 therefore actually execute).
 
 **Service-dependent suites (116 tests)** — not run by CI:
 
@@ -667,15 +667,17 @@ excluded from `python main.py verify`.
 **Recorded history vs. what you can reproduce.** The 179-test (M8) and
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
 executed inside the Linux verification container with the full local stack up;
-they are historical evidence, not results any host reproduces by default. What
-was actually executed in this public tree on 2026-10-10 (Windows 11 host,
-Python 3.11): 261 tests collected; `python main.py verify` produced
-**141 passed, 3 failed, 1 skipped** in ~9.1 minutes (547 seconds). The three failures are all
-`test_gold` Parquet-write checks failing in Hadoop's Windows shell
+they are historical evidence, not results any host reproduces by default. The
+most recent full-suite outcome reported for this public tree — an earlier run
+on 2026-10-10 (Windows 11 host, Python 3.11), **not freshly re-executed during
+the pre-push audit** — was `python main.py verify` producing
+**142 passed, 4 failed, 1 skipped**: the full suite was **not fully green**.
+The four failures were all attributed to `test_gold` Parquet-write checks
+failing in Hadoop's Windows shell
 (`winutils.exe`/`HADOOP_HOME` absent) — a documented Spark-on-Windows
 limitation of the host, not a platform logic defect; the same tests were part
 of the passing Linux container runs. On Linux (including the CI workflow's
-`ubuntu-latest` runner) the self-contained tier is expected to execute all 144
+`ubuntu-latest` runner) the self-contained tier is expected to execute all 146
 runnable tests, but the workflow has **not yet run on GitHub**: Actions results
 exist only after an authorized push.
 
