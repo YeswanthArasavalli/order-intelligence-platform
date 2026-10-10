@@ -631,9 +631,10 @@ currency-free KPI summaries and float conversion are incompatible with M5.
 
 ## Testing and verification
 
-`tests/` collects **263 tests** in two materially different tiers.
+`tests/` collects **263 tests** in two materially different tiers. `python -m
+pytest tests/ --collect-only -q` collects all 263 with no collection errors.
 
-**Self-contained suites (147 tests)** — run by `python main.py verify` and by CI:
+**Self-contained suites (147 collected)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
@@ -648,7 +649,22 @@ currency-free KPI summaries and float conversion are incompatible with M5.
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (146 therefore actually execute).
+is intentionally not published (146 therefore actually execute on Linux).
+
+**Windows Spark prerequisites.** The two local-Spark suites need Java 17 and a
+Python worker executable. `tests/conftest.py` pins `PYSPARK_PYTHON` /
+`PYSPARK_DRIVER_PYTHON` to the interpreter running pytest, so `python main.py
+verify` **and** a direct `python -m pytest tests/unit/...` both start local Spark
+reliably on Windows (upstream Spark otherwise spawns the literal `python3`, which
+is absent on a default Windows install). Separately, the three `test_gold.py`
+tests that commit Parquet/manifest files to the local disk run through Hadoop's
+`RawLocalFileSystem`, which on Windows shells out to `winutils.exe` to set
+directory permissions. `winutils.exe` is an external, non-redistributed Windows
+binary; when `HADOOP_HOME` does not resolve to a `bin\winutils.exe`, those three
+tests are **skipped with an explicit reason** (never silently passed). To execute
+them on Windows, install a Hadoop winutils build and set `HADOOP_HOME` to its
+root (with `%HADOOP_HOME%\bin\winutils.exe` present). On Linux — including the
+CI `ubuntu-latest` runner — the prerequisite is not needed and all three run.
 
 **Service-dependent suites (116 tests)** — not run by CI:
 
@@ -667,19 +683,21 @@ excluded from `python main.py verify`.
 **Recorded history vs. what you can reproduce.** The 179-test (M8) and
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
 executed inside the Linux verification container with the full local stack up;
-they are historical evidence, not results any host reproduces by default. The
-most recent full-suite outcome reported for this public tree — an earlier run
-on 2026-10-10 (Windows 11 host, Python 3.11), **not freshly re-executed during
-the pre-push audit** — was `python main.py verify` producing
-**142 passed, 4 failed, 1 skipped**: the full suite was **not fully green**.
-The four failures were all attributed to `test_gold` Parquet-write checks
-failing in Hadoop's Windows shell
-(`winutils.exe`/`HADOOP_HOME` absent) — a documented Spark-on-Windows
-limitation of the host, not a platform logic defect; the same tests were part
-of the passing Linux container runs. On Linux (including the CI workflow's
-`ubuntu-latest` runner) the self-contained tier is expected to execute all 146
-runnable tests, but the workflow has **not yet run on GitHub**: Actions results
-exist only after an authorized push.
+they are historical evidence, not results any host reproduces by default.
+
+The self-contained tier was **freshly re-executed for this release** on
+2026-10-10 (Windows host, Python 3.11, Java 17, `HADOOP_HOME` unset). `python
+main.py verify` produced **143 passed, 4 skipped, 0 failed** — the four skips
+are the one M9 baseline-integrity self-skip and the three Windows `winutils.exe`
+local-filesystem Gold persistence tests described above. Independently, `pytest
+tests/unit/test_gold.py` produced **16 passed, 3 skipped, 0 failed**, and
+`pytest tests/unit/test_milestone2.py` **7 passed** — the earlier Windows-only
+`Cannot run program "python3"` breakage of a direct pytest run is resolved by the
+`conftest.py` interpreter pin. No assertion was weakened and no Gold test was
+removed from the run set: on Linux (all 146 runnable execute, 1 M9 self-skip)
+the tier is expected to be **145 passed, 1 skipped, 0 failed**, but the GitHub
+Actions workflow **has not yet run** — Actions results exist only after an
+authorized push.
 
 ---
 
