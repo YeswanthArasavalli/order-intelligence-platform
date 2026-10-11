@@ -362,12 +362,17 @@ insight arithmetic against independent recomputation and drives the real Streaml
 widgets to prove the filters genuinely change the summary and insight text; these
 run in the same minimal demo environment and are wired into `python main.py verify`.
 The Cloud entry-point suite `python -m pytest tests/unit/test_cloud_entrypoint.py`
-(12 tests) additionally proves the hosted demo pins `OIP_DEMO_MODE=synthetic`
-whatever the ambient flag was, starts without constructing any real-source
-client, delegates all rendering to `dashboard/app.py`, and — in a clean
-subprocess with the repository root removed from `sys.path` and `PYTHONPATH`
-cleared — re-inserts the root itself so `dashboard` imports without
-`ModuleNotFoundError`.
+(18 tests) additionally proves the hosted demo pins `OIP_DEMO_MODE=synthetic`
+whatever the ambient flag was, sets it before `dashboard.app` is imported (with a
+reordered-flag control that shows the ordering is load-bearing), starts without
+constructing any real-source client, imports `redis` as a genuine module-load
+dependency while opening no socket, delegates all rendering to `dashboard/app.py`,
+and — in a clean subprocess with the repository root removed from `sys.path` and
+`PYTHONPATH` cleared — re-inserts the root itself so `dashboard` imports without
+`ModuleNotFoundError`. Its dependency-declaration tests scan every third-party
+module the hosted startup chain imports at module load and require each one to be
+pinned in `requirements-demo.txt` (a control that drops the `redis` pin proves the
+scan is not vacuous).
 
 ---
 
@@ -385,7 +390,7 @@ log):
 | Repository | `https://github.com/YeswanthArasavalli/order-intelligence-platform` |
 | Branch | `main` |
 | Entrypoint path | `streamlit_cloud/streamlit_app.py` |
-| Python version | Target **3.11** (3.11.9 is the tested interpreter). Setting it in "Advanced settings" is a required deployment step still to be confirmed against the live interface; then verify the version in the build log. |
+| Python version | Target **3.11** (3.11.9 is the tested interpreter; **3.12** is the documented Community Cloud default). The version is chosen only in the "Advanced settings" dropdown at deploy time and **cannot be changed after deployment** — Streamlit's own docs require deleting and redeploying the app. `3.14` is **not usable** with these pins: `pandas==2.2.3` publishes no cp314 wheel, so the declared demo set cannot install there (see the `requirements-demo.txt` compatibility note). Then verify the version in the build log. |
 | Dependencies | `streamlit_cloud/requirements.txt` (a one-line include of the root `requirements-demo.txt`). Community Cloud supports a requirements file beside the entrypoint, but which file it installs when both a root and an entrypoint file exist is **not yet verified** — the first build log must confirm it. |
 | Secrets / environment variables | **None required** — do not paste pipeline credentials; the demo reads no source |
 
@@ -431,6 +436,35 @@ packages (PySpark, confluent-kafka, boto3, psycopg2-binary) are absent, then
 confirm the live page renders the synthetic banner. CI (`ubuntu-latest`,
 Python 3.11) has run the full `requirements.txt` install and the self-contained
 suites green for the dashboard tiers, but that is not the Cloud environment.
+
+Hosted dependency diagnosis (measured locally, cross-resolved for Cloud Linux with
+`pip install --dry-run --only-binary=:all: --platform manylinux2014_x86_64`): the
+declared demo closure is 48 wheel-only packages on cp311/cp312/cp313 — including
+`redis==5.2.0` — and fails outright on cp314 because `pandas==2.2.3` has no cp314
+wheel. `redis` is therefore **already declared** and is a genuine import-time
+dependency of the hosted startup chain (`streamlit_cloud/streamlit_app.py` →
+`dashboard.demo_provider` → `dashboard.read_service` → `import redis`, and
+`storage.postgres_redis_serving` imports it too); demo and replay modes never
+construct a Redis client or open a socket. A `ModuleNotFoundError: No module named
+'redis'` on a Python 3.14 build is best explained as an installation failure rather
+than a missing pin: the declared set cannot install on 3.14, the app then falls back
+to the Community Cloud base environment (which ships `streamlit` and its own
+dependencies, so `pandas`/`streamlit` still import — Cloud documents `streamlit` as
+installed by default) and `redis` is simply absent — and `redis` is the first
+non-base third-party import in the chain, so it is where the traceback surfaces.
+That explanation is inferred from the local resolution evidence plus the reported
+Cloud log lines; the actual build log has not been read and must confirm it. The
+remedy is a deployment-setting change (select 3.11 or 3.12 and redeploy), not a
+dependency addition.
+
+The alternative — raising the pins so a 3.14 build can install them — was measured
+but not taken: every other demo pin (`redis==5.2.0`, `sqlalchemy==2.0.36`,
+`streamlit==1.40.1`, `plotly==5.24.1`, `pytest==8.3.3`) already resolves on cp314,
+and `pandas==2.3.3` is the earliest 2.x release with a cp314 wheel (and only for
+`manylinux_2_28`, not `manylinux2014`). Adopting it would change the locally
+validated pandas/streamlit environment shared with the root `requirements.txt` and
+require re-validating the 140 dashboard/replay/demo tests plus the live pipeline, so
+it is a deliberate upgrade decision rather than this fix.
 
 ---
 
@@ -862,10 +896,10 @@ M7 keeps cooldown state in PostgreSQL `alerts_serving` rather than in these keys
 
 ## Testing and verification
 
-`tests/` collects **322 tests** in two materially different tiers. `python -m
-pytest tests/ --collect-only -q` collects all 322 with no collection errors.
+`tests/` collects **328 tests** in two materially different tiers. `python -m
+pytest tests/ --collect-only -q` collects all 328 with no collection errors.
 
-**Self-contained suites (206 collected)** — run by `python main.py verify` and by CI:
+**Self-contained suites (212 collected)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
@@ -875,17 +909,17 @@ pytest tests/ --collect-only -q` collects all 322 with no collection errors.
 | `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
 | `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
 | `tests/unit/test_dashboard_replay.py` (42) | scripted synthetic replay: predefined snapshots, clock progression, render/filters, disclosure | none |
-| `tests/unit/test_cloud_entrypoint.py` (12) | Community Cloud entry point: pinned synthetic mode over any ambient flag, client-free startup, delegation, dependency-file arrangement, and the repository-root `sys.path` workaround proven in a neutral subprocess | none |
+| `tests/unit/test_cloud_entrypoint.py` (18) | Community Cloud entry point: pinned synthetic mode over any ambient flag, the flag set before `dashboard.app` imports, client-free and socket-free startup, delegation, dependency-file arrangement, declared coverage of every module-load import in the hosted chain, and the repository-root `sys.path` workaround proven in a neutral subprocess | none |
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
 | `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
 
-The four dashboard suites above account for 140 of the 206 collected tests; the
-remaining 66 are the Spark, observability, Cloud-entry and dispatcher suites.
+The four dashboard suites above account for 140 of the 212 collected tests; the
+remaining 72 are the Spark, observability, Cloud-entry and dispatcher suites.
 
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (205 therefore actually execute on Linux, 202
+is intentionally not published (211 therefore actually execute on Linux, 208
 where the Windows `winutils.exe` prerequisite below is absent).
 
 **Windows Spark prerequisites.** The two local-Spark suites need Java 17 and a
@@ -923,19 +957,23 @@ executed inside the Linux verification container with the full local stack up;
 they are historical evidence, not results any host reproduces by default.
 
 The self-contained tier was **freshly re-executed at this commit** on
-2026-10-11 on a Windows 11 (build 26300) host — repository commit `05bba38`
-plus the Cloud entry-point changes (including the two new subprocess path
-tests), the project `.venv` Python 3.11.9, Java 17.0.19 LTS, `HADOOP_HOME`
-unset.
-`python main.py verify` produced **202 passed, 4 skipped, 0 failed** in 339 s
-across the 206 collected tests. The four skips are the one M9
+2026-10-11 on a Windows 11 (build 26300) host — repository commit `0b3c4bf`
+plus the Cloud dependency-diagnosis changes (six additional entry-point tests:
+import-time dependency declaration, flag-before-import ordering and the
+scanner's own controls), the project `.venv` Python 3.11.9, Java 17.0.19 LTS,
+`HADOOP_HOME` unset.
+`python main.py verify` produced **208 passed, 4 skipped, 0 failed** in 907 s
+(15 m 07 s) across the 212 collected tests. The four skips are the one M9
 baseline-integrity self-skip and the three Windows `winutils.exe`
 local-filesystem Gold persistence tests described above; no assertion was
-weakened and no test was removed from the run set. An earlier run of the same
-tree, executed while other local processes were loading the machine, showed one
-transient Spark `Python worker failed to connect back` task failure in
-`test_gold.py`; that test passed on isolated rerun and in the clean full run
-quoted here. This is one execution, not a repeated-run claim.
+weakened and no test was removed from the run set, and this run showed no
+transient failure. The previous record for this tier (commit `05bba38` plus the
+earlier Cloud entry-point changes: **202 passed, 4 skipped** in 339 s of the then
+206 collected tests) also noted one older execution of that tree, made while other
+local processes were loading the machine, in which a single Spark task failed with
+`Python worker failed to connect back` in `test_gold.py`; that test passed on
+isolated rerun and in the clean run quoted there. This is one execution, not a
+repeated-run claim.
 
 As labelled history, the same host recorded two 189-test runs in which five
 Streamlit render tests failed and one 189-test run that passed cleanly shortly
@@ -944,8 +982,8 @@ before commit `2841c0e` made dashboard render state hermetic on the test side
 39 → 44 collected). Those earlier logs are git-ignored local artifacts and are
 cited only as provenance for that change.
 
-On Linux the three winutils-gated tests execute, so the tier is 206 collected,
-205 run and 1 self-skipped. GitHub Actions `unit-tests` **succeeded** on
+On Linux the three winutils-gated tests execute, so the tier is 212 collected,
+211 run and 1 self-skipped. GitHub Actions `unit-tests` **succeeded** on
 `ubuntu-latest` for commit `2841c0e` (run #6, total duration 2m 26s; the
 workflow provisions Python 3.11 and Java 17 and runs the same
 `python main.py verify` command). The overall conclusion is the only CI figure

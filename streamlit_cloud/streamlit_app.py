@@ -29,6 +29,12 @@ leave the full pipeline stack in root ``requirements.txt`` for local use. That
 selection is not yet verified: the first Community Cloud build log must confirm
 which requirements file was installed before the hosted dependency arrangement
 can be called correct.
+The hosted interpreter is a deployment setting rather than a repository file:
+Community Cloud chooses it from the "Advanced settings" dropdown and only changes
+it by deleting and redeploying the app. The demo pins publish Linux wheels for
+CPython 3.11-3.13 but not 3.14 (``pandas==2.2.3`` has no cp314 wheel), so a 3.14
+build cannot install the declared set and this import chain then fails on
+``import redis`` even though the pin is declared — deploy on 3.11 or 3.12.
 No secrets, credentials or ``.env`` file are required by this deployment.
 """
 

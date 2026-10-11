@@ -9,6 +9,21 @@
 # client.
 # Versions match requirements.txt so demo and full installs stay compatible.
 # Install: pip install -r requirements-demo.txt
+#
+# Interpreter compatibility (measured with `pip install --dry-run --only-binary=:all:
+# --platform manylinux2014_x86_64`, i.e. the Community Cloud Linux target): the
+# closed demo set — including redis==5.2.0 — resolves to 48 wheel-only packages on
+# CPython 3.11, 3.12 and 3.13, and FAILS on 3.14 because pandas==2.2.3 publishes no
+# cp314 wheel (`No matching distribution found for pandas==2.2.3`). A hosted build on
+# Python 3.14 therefore cannot install this file, and the first third-party import of
+# the startup chain (`redis` in dashboard/read_service.py) then raises
+# ModuleNotFoundError even though the pin is declared. Streamlit Community Cloud
+# selects the interpreter only from the "Advanced settings" dropdown at deploy time
+# (docs: Python cannot be changed after deployment without deleting and redeploying);
+# run the hosted demo on 3.11 (tested locally) or 3.12 (the Cloud default), not 3.14.
+# Raising pandas to 2.3.3 (the earliest 2.x with a cp314 wheel, manylinux_2_28 only)
+# would be a deliberate demo/pipeline stack upgrade, not a dependency fix, and needs
+# the dashboard suites and root requirements.txt re-validated alongside it.
 # =============================================================================
 
 streamlit==1.40.1               # dashboard/app.py, dashboard/demo.py
