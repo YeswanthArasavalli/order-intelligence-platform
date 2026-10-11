@@ -13,7 +13,8 @@
 
 This is a real-time order/revenue analytics platform: order events flow through
 Kafka → Spark Structured Streaming → a Bronze/Silver/Gold data lake → PostgreSQL/Redis
-→ a live Streamlit dashboard with anomaly alerting and observability. You can see
+→ a live Streamlit dashboard, plus one-shot rule-based alert evaluation and
+observability. You can see
 the dashboard **without any of that infrastructure** using the built-in synthetic
 demo — a fixed, clearly-labelled sample dataset rendered through the real read and
 render path.
@@ -44,7 +45,7 @@ below for the full architecture, testing and provenance details.
 
 ## What this project is
 
-This platform replicates the real-time order processing pipeline used by companies like Flipkart, Swiggy, and Amazon — ingesting order lifecycle events through Kafka, processing them with Spark Structured Streaming, storing them in a three-layer data lake (Bronze/Silver/Gold) on MinIO, computing business KPIs into PostgreSQL, and surfacing them on a live Streamlit dashboard with statistical anomaly detection.
+This platform replicates the real-time order processing pipeline used by companies like Flipkart, Swiggy, and Amazon — ingesting order lifecycle events through Kafka, processing them with Spark Structured Streaming, storing them in a three-layer data lake (Bronze/Silver/Gold) on MinIO, computing business KPIs into PostgreSQL, and surfacing them on a live Streamlit dashboard. Alerting is one-shot, currency-aware **rule evaluation** against the served Gold results (M7), persisted in PostgreSQL and consumed by a controlled-HTTP notification path (M8); no statistical anomaly detection runs in the shipped entry points — see [Alert path](#alert-path-as-implemented).
 
 It is built phase-by-phase, with each phase reviewed against Staff Data Engineer standards before the next begins.
 
@@ -401,14 +402,22 @@ run in the same minimal demo environment and are wired into `python main.py veri
 └───────┬──────────────────────────────────────┬───────────────┘
         │                                      │
 ┌───────▼──────────┐              ┌────────────▼──────────────┐
-│   REDIS CACHE    │              │  ALERT ENGINE              │
-│   hot-path KPIs  │              │  Layer 1: rules            │
-│   TTL-based      │              │  Layer 2: Z-score / EWMA   │
-└───────┬──────────┘              └────────────┬──────────────┘
-        │                                      │
-┌───────▼──────────────────────────────────────▼───────────────┐
+│   REDIS CACHE    │              │  ALERT EVALUATION (M7)    │
+│   hot-path KPIs  │              │  currency-aware rules     │
+│   TTL-based      │              │  one-shot evaluator       │
+└───────┬──────────┘              │  alerts_serving (PG):     │
+        │                         │  decisions · cooldowns    │
+        │                         └────────────┬──────────────┘
+        │                                      │ alert_events
+        │                         ┌────────────▼──────────────┐
+        │                         │  NOTIFICATIONS (M8)       │
+        │                         │  controlled HTTP receiver │
+        │                         └───────────────────────────┘
+        │
+┌───────▼──────────────────────────────────────────────────────┐
 │              STREAMLIT DASHBOARD                              │
-│   KPI cards · revenue chart · heatmap · alerts banner        │
+│   filters · KPI metrics · revenue chart · product tables     │
+│   currency-scoped insights · provenance                      │
 └──────────────────────────────────────────────────────────────┘
         │
 ┌───────▼──────────────────────────────────────────────────────┐
@@ -416,6 +425,41 @@ run in the same minimal demo environment and are wired into `python main.py veri
 │   Prometheus · Grafana · Kafka UI · Spark UI                 │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+### Alert path (as implemented)
+
+The shipped alerting code is the **M7 one-shot evaluator**, not a two-layer
+rules-plus-statistics engine:
+
+- **Entry point:** `python main.py alerts --rules alerts/rules.example.json`
+  dispatches to `alerts/evaluator.py` (see `main.py` and
+  [M7 contract](alerts/CONTRACT.md)).
+- **Definitions:** `alerts/definitions.py` validates explicit, currency-aware
+  rules (`revenue_threshold`, `revenue_drop`, `product_threshold`) with required
+  dimensions, decimal thresholds, severity and integer cooldown; unknown or
+  implicit rules fail validation.
+- **Evaluation:** each invocation reads the authoritative `gold_serving`
+  PostgreSQL snapshot through the frozen M5 reader, evaluates the latest stored
+  window per exact dimension, and persists definitions, provenance, evaluations,
+  cooldown state and firing events into the `alerts_serving` schema in one
+  transaction. Cooldown uses PostgreSQL `clock_timestamp()`, never a Redis TTL.
+- **Downstream:** M8 (`notifications/`) consumes the persisted
+  `alerts_serving.alert_events` rows and delivers through a **controlled/test
+  HTTP receiver only**; it never re-evaluates conditions, and external provider
+  delivery is not certified here.
+- **Dashboard:** the Streamlit app renders the M5/M6 serving snapshot only. It
+  contains no alert panel and reads no alert tables.
+
+`alerts/rule_engine.py` (threshold rules over the legacy `gold.*` tables),
+`alerts/statistical_detector.py` (Z-score / EWMA against
+`gold.anomaly_baseline`) and `alerts/alert_router.py` (Slack/PagerDuty) are
+**legacy, unwired modules**. No entry point or supported command imports them,
+the M7 evaluator never loads them, and the M7/M8 tests assert that
+`alerts.alert_router` is absent from `sys.modules`. They are retained unmodified
+as historical code. Because nothing produces `gold.anomaly_baseline` and nothing
+invokes the detector, **Z-score/EWMA statistical anomaly detection is not
+operational in this repository**; a forecast/ML detector remains a
+[future enhancement](#future-enhancements), not a current feature.
 
 ---
 
@@ -428,7 +472,7 @@ run in the same minimal demo environment and are wired into `python main.py veri
 | Stream engine     | Apache Spark Structured Streaming| 3.5.x    | Micro-batch processing               |
 | Data lake         | MinIO                            | Latest   | S3-compatible Bronze/Silver/Gold     |
 | Analytics store   | PostgreSQL                       | 16       | Gold layer metrics tables            |
-| Cache             | Redis                            | 7        | Dashboard hot-path, alert state      |
+| Cache             | Redis                            | 7        | Dashboard hot-path M5 snapshot       |
 | Dashboard         | Streamlit + Plotly               | Latest   | Live KPI dashboard                   |
 | Metrics           | Prometheus + Grafana             | v2.54/11 | System and business observability    |
 | Kafka UI          | Provectus Kafka UI               | v0.7.2   | Topic and consumer group inspection  |
@@ -671,18 +715,24 @@ order_intelligence
 ├── gold
 │   ├── revenue_by_minute    -- 1-min tumbling window KPIs
 │   ├── product_rankings     -- 5-min product leaderboard
-│   ├── region_heatmap       -- 15-min regional breakdown
+│   ├── region_heatmap       -- 15-min regional breakdown (legacy; not rendered)
 │   ├── lifecycle_funnel     -- Hourly event-type counts
-│   └── anomaly_baseline     -- Statistical baselines for alert engine
+│   └── anomaly_baseline     -- Statistical baselines (legacy detector; no producer)
 └── alerts
-    ├── alert_log            -- Full audit log of all fired alerts
-    └── active_alert_state   -- Cooldown state (prevents alert storms)
+    ├── alert_log            -- Full audit log of all fired alerts (legacy path)
+    └── active_alert_state   -- Cooldown state (prevents alert storms) (legacy path)
 ```
 
 Milestone 4 adds the separate `gold_serving` schema through
 `scripts/postgres/m4_gold_serving.sql` or the idempotent runtime serving DDL.
 It preserves the legacy `gold.*` tables because their keys and precision do not
 match the committed M3 Gold contract.
+
+Milestone 7 writes to a separate `alerts_serving` schema
+(`alerts/persistence.sql`). The `alerts.*` tables above, `gold.anomaly_baseline`
+and `gold.region_heatmap` are created by `init.sql` for the legacy alert/KPI
+helpers; the M7 evaluator, M6 dashboard and M8 notification paths neither
+populate nor read them.
 
 ---
 
@@ -733,30 +783,35 @@ they are not the M5 analytical cache:
 | `dashboard:region_heatmap:{window_start}`    | 60s   | Cached heatmap query result      |
 
 Legacy helpers use TTL expiry without complete-snapshot invalidation. Their
-currency-free KPI summaries and float conversion are incompatible with M5.
+currency-free KPI summaries and float conversion are incompatible with M5, and
+M7 keeps cooldown state in PostgreSQL `alerts_serving` rather than in these keys.
 
 ## Testing and verification
 
-`tests/` collects **305 tests** in two materially different tiers. `python -m
-pytest tests/ --collect-only -q` collects all 305 with no collection errors.
+`tests/` collects **310 tests** in two materially different tiers. `python -m
+pytest tests/ --collect-only -q` collects all 310 with no collection errors.
 
-**Self-contained suites (189 collected)** — run by `python main.py verify` and by CI:
+**Self-contained suites (194 collected)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
 | `tests/unit/test_milestone2.py` (7) | DQ/Silver/DLQ logic | local in-process Spark (`local[*]`), Java 17 |
 | `tests/unit/test_gold.py` (19) | Gold aggregation, Parquet/manifest commits | same |
-| `tests/unit/test_dashboard.py` (39) | M6 read contract, Streamlit render | none |
+| `tests/unit/test_dashboard.py` (44) | M6 read contract, Streamlit render, demo/real render-state isolation | none |
 | `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
 | `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
 | `tests/unit/test_dashboard_replay.py` (42) | scripted synthetic replay: predefined snapshots, clock progression, render/filters, disclosure | none |
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
 | `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
 
+The four dashboard suites above account for 140 of the 194 collected tests; the
+remaining 54 are the Spark, observability and dispatcher suites.
+
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (188 therefore actually execute on Linux).
+is intentionally not published (193 therefore actually execute on Linux, 190
+where the Windows `winutils.exe` prerequisite below is absent).
 
 **Windows Spark prerequisites.** The two local-Spark suites need Java 17 and a
 Python worker executable. `tests/conftest.py` pins `PYSPARK_PYTHON` /
@@ -792,22 +847,30 @@ excluded from `python main.py verify`.
 executed inside the Linux verification container with the full local stack up;
 they are historical evidence, not results any host reproduces by default.
 
-The self-contained tier was **freshly re-executed for this release** on
-2026-10-10 (Windows host, Python 3.11, Java 17, `HADOOP_HOME` unset). `python
-main.py verify` produced **185 passed, 4 skipped, 0 failed** across the 189
-collected tests — the four skips are the one M9 baseline-integrity self-skip and
-the three Windows `winutils.exe` local-filesystem Gold persistence tests
-described above. Independently, `pytest tests/unit/test_gold.py` produced **16
-passed, 3 skipped, 0 failed**, `pytest tests/unit/test_milestone2.py` **7
-passed**, `pytest tests/unit/test_dashboard_replay.py` **42 passed**, and the
-three pre-existing dashboard/verify suites together **98 passed** — the earlier
-Windows-only `Cannot run program "python3"` breakage of a direct pytest run is
-resolved by the `conftest.py` interpreter pin. No assertion was weakened and no
-Gold test was removed from the run set: on Linux the three winutils-gated tests
-execute, so the tier is expected to be **188 passed, 1 skipped, 0 failed**.
-GitHub Actions `unit-tests` **succeeded** on `ubuntu-latest` for the immediate
-predecessor commit `a93bc1d` (run #3, tier 147 as it stood before the replay
-suite); the Actions result for this commit lands after its push.
+The self-contained tier was **freshly re-executed at this commit** on
+2026-10-11 on a Windows 11 (build 26300) host — repository commit `2841c0e`,
+the project `.venv` Python 3.11.9, Java 17.0.19 LTS, `HADOOP_HOME` unset.
+`python main.py verify` produced **190 passed, 4 skipped, 0 failed** in 510 s
+across the 194 collected tests. The four skips are the one M9
+baseline-integrity self-skip and the three Windows `winutils.exe`
+local-filesystem Gold persistence tests described above; no assertion was
+weakened and no test was removed from the run set. This is one execution, not a
+repeated-run claim.
+
+As labelled history, the same host recorded two 189-test runs in which five
+Streamlit render tests failed and one 189-test run that passed cleanly shortly
+before commit `2841c0e` made dashboard render state hermetic on the test side
+(an autouse cache/environment isolation fixture plus five hostile-state tests,
+39 → 44 collected). Those earlier logs are git-ignored local artifacts and are
+cited only as provenance for that change.
+
+On Linux the three winutils-gated tests execute, so the tier is 194 collected,
+193 run and 1 self-skipped. GitHub Actions `unit-tests` **succeeded** on
+`ubuntu-latest` for commit `2841c0e` (run #6, total duration 2m 26s; the
+workflow provisions Python 3.11 and Java 17 and runs the same
+`python main.py verify` command). The overall conclusion is the only CI figure
+claimed here — the per-test Linux pass/skip breakdown is not available from this
+environment, so no exact CI pass count is stated.
 
 ---
 
@@ -902,7 +965,7 @@ M1-M9 and Phase C are complete and frozen.
 | M4 | Gold -> PostgreSQL serving | FROZEN |
 | M5 | Redis serving cache | FROZEN |
 | M6 | Streamlit dashboard | FROZEN |
-| M7 | Alert rule engine | FROZEN |
+| M7 | One-shot currency-aware alert rule evaluation | FROZEN |
 | M8 | Notification service (controlled HTTP only) | FROZEN |
 | M9 | Observability (Prometheus/Grafana) | FROZEN |
 | Phase C | Local Docker packaging / sealed MinIO runtime verification | FROZEN |
