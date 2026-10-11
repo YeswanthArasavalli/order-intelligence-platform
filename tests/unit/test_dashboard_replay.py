@@ -356,7 +356,7 @@ def test_null_average_order_value_stays_distinguishable_from_zero(isolated):
     assert app.metric[5].value == f"USD {EM} (not applicable)"
     usd_revenue = app.dataframe[2].value  # INR revenue, INR products, USD revenue, USD products
     assert list(usd_revenue["avg_order_value"]) == [EM]
-    assert list(usd_revenue["net_revenue"]) == ["0.00000000"]  # genuine zero renders as digits, not the dash
+    assert list(usd_revenue["net_revenue"]) == ["0.00"]  # genuine zero renders as digits, not the dash
 
 
 @pytest.mark.parametrize("flag", ["Scripted", " scripted", "scripted "])
@@ -379,5 +379,5 @@ def test_fixed_demo_mode_is_unchanged_by_the_replay_addition(isolated):
     assert not [button for button in app.button if button.label == "Restart replay"]
     assert len(app.metric) == 6 and len(app.dataframe) == 4 and len(app.get("plotly_chart")) == 2
     assert [metric.value for metric in app.metric] == [
-        "INR 12,830.50000005", "3", "INR 5,110.16666668",
-        "USD 18,890.00999999", "3", "USD 6,710.00333333"]
+        "INR 12,830.50", "3", "INR 5,110.17",
+        "USD 18,890.01", "3", "USD 6,710.00"]

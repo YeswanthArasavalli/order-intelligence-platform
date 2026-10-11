@@ -220,26 +220,26 @@ def test_region_selection_updates_summary_and_leading_region(isolated):
     assert any(f"Matching rows {EM} revenue: 4, products: 7" in value for value in caption_text(app))
     text = insight_text(app)
     assert "Leading region by net revenue (1 in view, region north-india)" in text
-    assert "north-india" in text and "26,750.00000001" in text
+    assert "north-india" in text and "26,750.00" in text
 
 
 def test_region_switch_changes_the_derived_leader(isolated):
     app = run_demo_app(isolated)
     app.selectbox(key="currency").select("INR").run()
     app.selectbox(key="region").select("south-india").run()
-    assert "south-india" in insight_text(app) and "38,981.75000000" in insight_text(app)
+    assert "south-india" in insight_text(app) and "38,981.75" in insight_text(app)
     app.selectbox(key="region").select("north-india").run()
     text = insight_text(app)
-    assert "north-india" in text and "26,750.00000001" in text and "38,981.75000000" not in text
+    assert "north-india" in text and "26,750.00" in text and "38,981.75" not in text
 
 
 def test_currency_selection_scopes_the_insight_currency(isolated):
     app = run_demo_app(isolated)
     app.selectbox(key="currency").select("INR").run()
-    assert "INR 38,981.75000000" in insight_text(app)
+    assert "INR 38,981.75" in insight_text(app)
     app.selectbox(key="currency").select("USD").run()
     text = insight_text(app)
-    assert "USD 33,129.99999999" in text and "INR 38,981.75000000" not in text
+    assert "USD 33,130.00" in text and "INR 38,981.75" not in text
 
 
 def test_out_of_range_window_clears_values_summary_and_insights(isolated):
@@ -270,8 +270,8 @@ def test_partial_time_range_changes_rows_and_leader(isolated):
     app.text_input(key="end").set_value("2026-10-05T12:02:00+00:00").run()
     assert not app.exception and not app.error
     assert any(f"Matching rows {EM} revenue: 4, products: 7" in value for value in caption_text(app))
-    # Leader over the two selected windows (north 16,248 vs south 26,500.25) is south-india.
-    assert "26,500.24999995" in insight_text(app)
+    # Leader over the two selected windows (north 16,248.00 vs south 26,500.25) is south-india.
+    assert "26,500.25" in insight_text(app)
 
 
 def test_currency_region_and_time_filters_apply_together(isolated):
@@ -285,4 +285,4 @@ def test_currency_region_and_time_filters_apply_together(isolated):
     # Revenue is currency+region+time filtered (2 rows); products keep currency+time only (7).
     assert any(f"Matching rows {EM} revenue: 2, products: 7" in value for value in caption_text(app))
     text = insight_text(app)
-    assert "region south-india" in text and "26,500.24999995" in text
+    assert "region south-india" in text and "26,500.25" in text

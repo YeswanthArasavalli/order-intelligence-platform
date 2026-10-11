@@ -896,16 +896,16 @@ M7 keeps cooldown state in PostgreSQL `alerts_serving` rather than in these keys
 
 ## Testing and verification
 
-`tests/` collects **328 tests** in two materially different tiers. `python -m
-pytest tests/ --collect-only -q` collects all 328 with no collection errors.
+`tests/` collects **337 tests** in two materially different tiers. `python -m
+pytest tests/ --collect-only -q` collects all 337 with no collection errors.
 
-**Self-contained suites (212 collected)** — run by `python main.py verify` and by CI:
+**Self-contained suites (221 collected)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
 | `tests/unit/test_milestone2.py` (7) | DQ/Silver/DLQ logic | local in-process Spark (`local[*]`), Java 17 |
 | `tests/unit/test_gold.py` (19) | Gold aggregation, Parquet/manifest commits | same |
-| `tests/unit/test_dashboard.py` (44) | M6 read contract, Streamlit render, demo/real render-state isolation | none |
+| `tests/unit/test_dashboard.py` (53) | M6 read contract, Streamlit render, currency display formatter, demo/real render-state isolation | none |
 | `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
 | `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
 | `tests/unit/test_dashboard_replay.py` (42) | scripted synthetic replay: predefined snapshots, clock progression, render/filters, disclosure | none |
@@ -913,13 +913,13 @@ pytest tests/ --collect-only -q` collects all 328 with no collection errors.
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
 | `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
 
-The four dashboard suites above account for 140 of the 212 collected tests; the
+The four dashboard suites above account for 149 of the 221 collected tests; the
 remaining 72 are the Spark, observability, Cloud-entry and dispatcher suites.
 
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (211 therefore actually execute on Linux, 208
+is intentionally not published (220 therefore actually execute on Linux, 217
 where the Windows `winutils.exe` prerequisite below is absent).
 
 **Windows Spark prerequisites.** The two local-Spark suites need Java 17 and a
@@ -957,20 +957,24 @@ executed inside the Linux verification container with the full local stack up;
 they are historical evidence, not results any host reproduces by default.
 
 The self-contained tier was **freshly re-executed at this commit** on
-2026-10-11 on a Windows 11 (build 26300) host — repository commit `0b3c4bf`
-plus the Cloud dependency-diagnosis changes (six additional entry-point tests:
-import-time dependency declaration, flag-before-import ordering and the
-scanner's own controls), the project `.venv` Python 3.11.9, Java 17.0.19 LTS,
+2026-10-11 on a Windows 11 (build 26300) host — repository commit `ee0bcfe`
+plus the dashboard currency-display polish (nine additional display-formatter
+tests in `test_dashboard.py`: 44 → 53 collected; stored values and contract
+serialization are unchanged, only the rendered precision moved to two
+decimals), the project `.venv` Python 3.11.9, Java 17.0.19 LTS,
 `HADOOP_HOME` unset.
-`python main.py verify` produced **208 passed, 4 skipped, 0 failed** in 907 s
-(15 m 07 s) across the 212 collected tests. The four skips are the one M9
+`python main.py verify` produced **217 passed, 4 skipped, 0 failed** in 433 s
+(7 m 13 s) across the 221 collected tests. The four skips are the one M9
 baseline-integrity self-skip and the three Windows `winutils.exe`
 local-filesystem Gold persistence tests described above; no assertion was
 weakened and no test was removed from the run set, and this run showed no
-transient failure. The previous record for this tier (commit `05bba38` plus the
-earlier Cloud entry-point changes: **202 passed, 4 skipped** in 339 s of the then
-206 collected tests) also noted one older execution of that tree, made while other
-local processes were loading the machine, in which a single Spark task failed with
+transient failure. The previous record for this tier (commit `0b3c4bf` plus the
+Cloud dependency-diagnosis changes: **208 passed, 4 skipped** in 907 s of the then
+212 collected tests) preceded it; that record in turn replaced the one at commit
+`05bba38` plus the earlier Cloud entry-point changes (**202 passed, 4 skipped** in
+339 s of the then 206 collected tests), which also noted one older execution of
+that tree, made while other local processes were loading the machine, in which a
+single Spark task failed with
 `Python worker failed to connect back` in `test_gold.py`; that test passed on
 isolated rerun and in the clean run quoted there. This is one execution, not a
 repeated-run claim.

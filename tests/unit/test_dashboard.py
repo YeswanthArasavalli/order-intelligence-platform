@@ -207,8 +207,11 @@ def test_all_currencies_full_product_identity_exact_values(setup):
     assert got.product_rankings[0]["revenue"] == Decimal("999999999999999999999999999999.99999999")
     tables = {"revenue_by_minute": got.revenue_by_minute, "product_rankings": got.product_rankings}
     assert canonical(tables)[0] == source["metadata"]["snapshot_digest"]
-    assert service.format_money(got.revenue_by_minute[0]["net_revenue"], "INR") == "INR -30.00000001"
-    assert service.display_rows(got.product_rankings)[0]["revenue"] == "999999999999999999999999999999.99999999"
+    # Display is the shared two-decimal boundary; the stored Decimals above are untouched.
+    assert service.format_money(got.revenue_by_minute[0]["net_revenue"], "INR") == "INR -30.00"
+    assert service.display_rows(got.product_rankings)[0]["revenue"] == "1,000,000,000,000,000,000,000,000,000,000.00"
+    assert got.revenue_by_minute[0]["net_revenue"] == Decimal("-30.00000001")
+    assert got.product_rankings[0]["revenue"] == Decimal("999999999999999999999999999999.99999999")
 
 
 def test_filters_are_dimension_preserving(setup):
@@ -323,12 +326,14 @@ def test_display_rows_renders_null_as_em_dash_and_preserves_values():
     display = service.display_rows([row])[0]
     # A null renders as an em dash, never the raw Python "None".
     assert display["avg_order_value"] == service.NULL_DISPLAY == "\u2014"
-    # A genuine zero stays a zero and remains distinguishable from null.
-    assert display["net_revenue"] == "0.00000000"
-    # Ordinary positive money keeps the established eight-place precision.
-    assert display["gross_revenue"] == "1234.50000000"
-    # The presentation transform never mutates the underlying source value.
+    # A genuine zero stays a zero (0.00) and remains distinguishable from null.
+    assert display["net_revenue"] == "0.00"
+    # Ordinary positive money renders through the shared two-decimal boundary.
+    assert display["gross_revenue"] == "1,234.50"
+    # The presentation transform never mutates the underlying source values.
     assert row["avg_order_value"] is None
+    assert row["net_revenue"] == Decimal("0")
+    assert row["gross_revenue"] == Decimal("1234.5")
 
 
 def test_streamlit_tables_lead_with_window_columns_and_render_null_dash(setup, monkeypatch):
@@ -351,10 +356,10 @@ def test_streamlit_tables_lead_with_window_columns_and_render_null_dash(setup, m
     assert "window_end" in revenue_frame.columns
     assert list(revenue_frame.columns[:2]) == ["window_start", "window_end"]
     # The fixture's null avg_order_value renders as an em dash, not "None"; a real
-    # value in the same column keeps eight-place precision.
+    # value in the same column renders at the shared two-decimal precision.
     avg_cells = set(revenue_frame["avg_order_value"])
     assert service.NULL_DISPLAY in avg_cells and "None" not in avg_cells
-    assert "100.00000000" in avg_cells
+    assert "100.00" in avg_cells
 
     # The product table shared the same root cause and received the same fix.
     product_frame = app.dataframe[1].value
@@ -362,8 +367,64 @@ def test_streamlit_tables_lead_with_window_columns_and_render_null_dash(setup, m
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 currency presentation: the shared two-decimal display formatter
+# ---------------------------------------------------------------------------
+
+def test_format_money_is_the_shared_two_decimal_currency_boundary():
+    """Phase 2 polish: KPI/insight money renders at two decimals with separators."""
+    assert service.format_money(Decimal("12830.50000005"), "INR") == "INR 12,830.50"
+    assert service.format_money(Decimal("18890.00999999"), "USD") == "USD 18,890.01"
+    assert service.format_money(Decimal("1234.5"), "INR") == "INR 1,234.50"
+    assert service.format_money(Decimal("0.1"), "USD") == "USD 0.10"
+    assert service.format_money(Decimal("1500000000.5"), "USD") == "USD 1,500,000,000.50"
+
+
+def test_format_money_rounds_half_up_without_mutating_the_stored_decimal():
+    # Two-decimal display rounding is half-up and presentation-only: the passed
+    # Decimal object is never quantized, so callers keep full contract precision.
+    stored = Decimal("15330.50000005")
+    assert service.format_money(stored, "INR") == "INR 15,330.50"
+    assert stored == Decimal("15330.50000005") and stored.as_tuple().exponent == -8
+    assert service.format_money(Decimal("0.005"), "INR") == "INR 0.01"
+    assert service.format_money(Decimal("-0.005"), "INR") == "INR -0.01"
+    assert service.format_money(Decimal("5110.16666668"), "INR") == "INR 5,110.17"
+
+
+def test_format_money_zero_negative_and_null_are_explicit_and_distinct():
+    assert service.format_money(Decimal("0"), "INR") == "INR 0.00"
+    assert service.format_money(Decimal("-30.00000001"), "INR") == "INR -30.00"
+    null_text = service.format_money(None, "USD")
+    assert null_text == "USD — (not applicable)"  # a null never degrades into a zero
+    assert null_text != service.format_money(Decimal("0"), "USD")
+
+
+@pytest.mark.parametrize("invalid", ["12.34", 1.5, True, object()])
+def test_format_amount_fails_loudly_on_non_decimal_values(invalid):
+    # The renderer receives contract-validated Decimals; anything else must raise
+    # instead of being coerced into a plausible-looking amount.
+    with pytest.raises(TypeError):
+        service.format_amount(invalid)
+
+
+def test_format_amount_handles_the_contract_maximum_magnitude():
+    # DECIMAL(38,8)-shaped values exceed the default decimal context precision;
+    # display must not raise InvalidOperation on them.
+    assert service.format_amount(Decimal("999999999999999999999999999999.99999999")) == \
+        "1,000,000,000,000,000,000,000,000,000,000.00"
+
+
+def test_display_rows_uses_the_shared_formatter_and_keeps_rows_intact():
+    row = {"gross_revenue": Decimal("24999.99999995"), "order_count": 5, "region": "south-india"}
+    display = service.display_rows([row])[0]
+    assert display["gross_revenue"] == "25,000.00"  # float dust rounded for display only
+    assert row["gross_revenue"] == Decimal("24999.99999995")  # the stored value is unchanged
+    assert display["order_count"] == 5 and display["region"] == "south-india"
+
+
+# ---------------------------------------------------------------------------
 # P1 isolation regression: mode selection and cache state at test boundaries
 # ---------------------------------------------------------------------------
+
 
 def test_hostile_demo_flag_cannot_reach_a_real_render(setup, monkeypatch):
     """An exported ``OIP_DEMO_MODE=synthetic`` must not move a real render onto demo data.

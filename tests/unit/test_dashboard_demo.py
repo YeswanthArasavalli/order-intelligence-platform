@@ -282,8 +282,8 @@ def test_demo_initial_view_is_populated_with_exact_values(isolated):
     assert not app.error and not app.info
     assert len(app.metric) == 6 and len(app.dataframe) == 4
     assert [metric.value for metric in app.metric] == [
-        "INR 12,830.50000005", "3", "INR 5,110.16666668",
-        "USD 18,890.00999999", "3", "USD 6,710.00333333"]
+        "INR 12,830.50", "3", "INR 5,110.17",
+        "USD 18,890.01", "3", "USD 6,710.00"]
     assert all(not frame.value.empty for frame in app.dataframe)
     # INR revenue, INR products, USD revenue, USD products for the full sample.
     assert [frame.value.shape[0] for frame in app.dataframe] == [8, 7, 4, 5]

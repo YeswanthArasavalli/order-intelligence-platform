@@ -6,7 +6,7 @@ population, source writes, metrics recomputation, or data-lake dependencies.
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 import os
 import re
 
@@ -202,20 +202,61 @@ def filter_rows(snapshot: DashboardSnapshot, *, currency=None, region=None, star
 # Arrow cell reads like an application bug, so it is shown as an em dash instead.
 NULL_DISPLAY = "\u2014"
 
+# The single money-display boundary (Phase 2 polish). The Gold contract stores
+# amounts at exactly eight decimal places, and stored ledgers legitimately carry
+# float-derived dust (e.g. 12,830.50000005) produced by upstream accumulation;
+# every *display* of money — KPI cards, chart hover text, table cells and
+# insight lines — renders fixed two-decimal amounts with thousands separators
+# through ``format_amount``/``format_money`` below. The rounding is
+# presentation-only: no row, aggregate, filter or stored value is ever
+# quantized by these helpers, so all calculations keep the full contract
+# precision. Two decimals is the only documented display precision; there are
+# no per-section exceptions — sections that must prove the stored exactness
+# (the provenance JSON) show raw contract strings, not formatter output.
+MONEY_DISPLAY_DECIMALS = 2
+
+
+def _round_for_display(value: Decimal, decimals: int) -> Decimal:
+    """Half-up rounding at ``decimals`` places, immune to context precision."""
+    with localcontext() as ctx:
+        # ``quantize`` raises InvalidOperation when the result needs more digits
+        # than the context precision (the contract type reaches 30 integer
+        # digits), so size the context to the value's own digit count.
+        ctx.prec = max(len(value.as_tuple().digits), value.adjusted() + decimals + 1)
+        return value.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
+
+
+def format_amount(value: Decimal | int, decimals: int = MONEY_DISPLAY_DECIMALS) -> str:
+    """Format one stored money value for display, without a currency prefix.
+
+    Accepts ``Decimal`` and ``int`` only; anything else raises ``TypeError``
+    instead of coercing into a plausible-looking number (rows reaching the
+    renderer have already been validated as exact ``Decimal`` by ``_typed``).
+    ``None`` is a null and is handled by the callers (``NULL_DISPLAY`` /
+    ``format_money``), never rendered as a misleading zero.
+    """
+    if isinstance(value, bool) or not isinstance(value, (Decimal, int)):
+        raise TypeError(f"Money display requires Decimal, got {type(value).__name__}")
+    return f"{_round_for_display(Decimal(value), decimals):,.{decimals}f}"
+
+
+def format_money(value: Decimal | None, currency: str, decimals: int = MONEY_DISPLAY_DECIMALS) -> str:
+    """Currency-prefixed display string; a null stays null with explicit wording."""
+    if value is None:
+        return f"{currency} {NULL_DISPLAY} (not applicable)"
+    return f"{currency} {format_amount(value, decimals)}"
+
 
 def display_rows(rows):
-    """Keep exact money in Streamlit/Arrow tables; avoid implicit numeric coercion.
+    """Render contract rows for Streamlit/Arrow tables without numeric coercion.
 
-    Nulls render as ``NULL_DISPLAY`` for presentation only: the underlying row value
-    stays null, and a genuine zero still formats as ``0.00000000``, so a null cell is
-    never confused with a zero. This is the narrowest display boundary shared by every
-    rendered table; it changes no arithmetic, serialization or persisted data.
+    Decimal money cells go through the shared two-decimal ``format_amount``
+    (presentation-only rounding of float-derived stored dust; the row objects
+    are never mutated), datetimes keep their exact ISO text, and nulls render
+    as ``NULL_DISPLAY`` so a null cell is never confused with a genuine zero
+    (which formats as ``0.00``). Ints and strings pass through untouched.
     """
-    return [{k: (format(v, ".8f") if isinstance(v, Decimal) else
+    return [{k: (format_amount(v) if isinstance(v, Decimal) else
                  v.isoformat(timespec="microseconds") if isinstance(v, datetime) else
                  NULL_DISPLAY if v is None else v)
              for k, v in row.items()} for row in rows]
-
-
-def format_money(value: Decimal | None, currency: str) -> str:
-    return f"{currency} {value:,.8f}" if value is not None else f"{currency} — (not applicable)"

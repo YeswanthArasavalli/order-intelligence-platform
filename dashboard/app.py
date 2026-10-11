@@ -22,8 +22,8 @@ from dashboard import replay as replay_provider
 from dashboard.demo_provider import (DEMO_DISCLOSURE, MODE_DEMO, MODE_INVALID, MODE_REAL, MODE_REPLAY, demo_config,
                                      mode_error_message, selected_mode, synthetic_snapshot)
 from dashboard.read_service import (
-    DashboardConfig, DashboardReadService, DashboardUnavailable, display_rows,
-    filter_rows, format_money,
+    DashboardConfig, DashboardReadService, DashboardUnavailable, display_rows, filter_rows,
+    format_amount, format_money,
 )
 from storage.postgres_redis_serving import TABLES
 
@@ -50,7 +50,7 @@ def get_read_service(config):
 
 
 def revenue_chart(rows, currency):
-    """Only chart coordinates are approximate floats; exact Decimal text is retained."""
+    """Only chart coordinates are approximate floats; hover text uses the shared money formatter."""
     figure = go.Figure()
     for region in sorted({row["region"] for row in rows}):
         selected = [r for r in rows if r["region"] == region]
@@ -58,7 +58,7 @@ def revenue_chart(rows, currency):
             x=[r["window_start"].isoformat() for r in selected],
             y=[float(r["net_revenue"]) for r in selected],  # presentation-only Plotly boundary
             mode="lines+markers", name=f"{region} / {currency}",
-            customdata=[[format(r["net_revenue"], ".8f"), r["window_end"].isoformat()] for r in selected],
+            customdata=[[format_amount(r["net_revenue"]), r["window_end"].isoformat()] for r in selected],
             hovertemplate="%{x}<br>Window end: %{customdata[1]}<br>Net: %{customdata[0]} " + currency + "<extra>%{fullData.name}</extra>",
         ))
     figure.update_layout(yaxis_title=f"Net revenue — {currency}", xaxis_title="Window start (UTC)",
@@ -259,7 +259,8 @@ def render(config, demo, replay=False):
             b.metric(f"Orders — {code}", str(row["order_count"]))
             c.metric(f"Average order value — {code}", format_money(row["avg_order_value"], code))
             st.plotly_chart(revenue_chart(revenue, code), use_container_width=True)
-            st.caption("Plot positions are approximate; hover text and the table retain exact eight-place amounts.")
+            st.caption("Displayed amounts are rounded to two decimals \u2014 presentation only; stored values, "
+                       "aggregations and filters keep the exact eight-place contract precision.")
             st.dataframe(display_frame(revenue, "revenue_by_minute"), use_container_width=True, hide_index=True)
         else:
             st.info(f"No revenue rows match these filters for {code}; this is not a zero-revenue assertion.")
