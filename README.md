@@ -454,8 +454,12 @@ rules-plus-statistics engine:
 `alerts/statistical_detector.py` (Z-score / EWMA against
 `gold.anomaly_baseline`) and `alerts/alert_router.py` (Slack/PagerDuty) are
 **legacy, unwired modules**. No entry point or supported command imports them,
-the M7 evaluator never loads them, and the M7/M8 tests assert that
-`alerts.alert_router` is absent from `sys.modules`. They are retained unmodified
+the M7 evaluator never loads them. The isolation assertions that
+`alerts.alert_router` is absent from `sys.modules` live in the
+PostgreSQL-backed, service-dependent M7/M8 suites; those suites are excluded
+from the self-contained CI tier and from `python main.py verify`, so the
+assertions were inspected statically during the audit but were not executed
+by that audit. They are retained unmodified
 as historical code. Because nothing produces `gold.anomaly_baseline` and nothing
 invokes the detector, **Z-score/EWMA statistical anomaly detection is not
 operational in this repository**; a forecast/ML detector remains a
