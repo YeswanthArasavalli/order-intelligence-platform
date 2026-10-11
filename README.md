@@ -361,6 +361,76 @@ value is summed across currencies and none can disagree with the table above it.
 insight arithmetic against independent recomputation and drives the real Streamlit
 widgets to prove the filters genuinely change the summary and insight text; these
 run in the same minimal demo environment and are wired into `python main.py verify`.
+The Cloud entry-point suite `python -m pytest tests/unit/test_cloud_entrypoint.py`
+(12 tests) additionally proves the hosted demo pins `OIP_DEMO_MODE=synthetic`
+whatever the ambient flag was, starts without constructing any real-source
+client, delegates all rendering to `dashboard/app.py`, and — in a clean
+subprocess with the repository root removed from `sys.path` and `PYTHONPATH`
+cleared — re-inserts the root itself so `dashboard` imports without
+`ModuleNotFoundError`.
+
+---
+
+## Streamlit Community Cloud (hosted synthetic demo)
+
+This deployment is a **synthetic-data portfolio demo, not a live pipeline**. The
+hosted page is the unchanged dashboard in fixed demo mode, with the visible
+`Synthetic demo data — not a live pipeline.` banner on every view. Deployment
+inputs (the entrypoint and its demo behavior are verified locally on Windows;
+the hosted build itself is confirmed only by the first Community Cloud build
+log):
+
+| Setting | Value |
+|---|---|
+| Repository | `https://github.com/YeswanthArasavalli/order-intelligence-platform` |
+| Branch | `main` |
+| Entrypoint path | `streamlit_cloud/streamlit_app.py` |
+| Python version | Target **3.11** (3.11.9 is the tested interpreter). Setting it in "Advanced settings" is a required deployment step still to be confirmed against the live interface; then verify the version in the build log. |
+| Dependencies | `streamlit_cloud/requirements.txt` (a one-line include of the root `requirements-demo.txt`). Community Cloud supports a requirements file beside the entrypoint, but which file it installs when both a root and an entrypoint file exist is **not yet verified** — the first build log must confirm it. |
+| Secrets / environment variables | **None required** — do not paste pipeline credentials; the demo reads no source |
+
+`streamlit_cloud/streamlit_app.py` is a thin entrypoint, not a second
+dashboard: it prepends the repository root to `sys.path` (so root-level
+packages import when Streamlit launches only that file), sets
+`OIP_DEMO_MODE=synthetic` explicitly — Community Cloud offers no way to preset
+environment variables and an unset flag would otherwise select real mode — and
+then runs the existing `dashboard/app.py`. Real-mode semantics are untouched
+elsewhere: the global default of `selected_mode()` stays real for every other
+launch path, invalid flags still fail fast on `dashboard/app.py`, and
+`python -m dashboard.demo` and the scripted replay behave exactly as before.
+
+Dependency arrangement: Community Cloud supports a requirements file in the
+repository root or beside the app entrypoint ([Cloud app-dependencies
+docs](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies)),
+but the docs do **not** establish which file is installed when both exist. The
+placement here — the entrypoint in `streamlit_cloud/` next to its own
+requirements file, alongside a root `requirements.txt` — *assumes* the
+entrypoint's file wins, and that precedence is an unverified assumption, not a
+documented guarantee. The intent is that the hosted app installs the
+dependencies declared for the synthetic demo through a single
+`-r ../requirements-demo.txt` include (that relative-path resolution is
+locally verified but **not yet proven on Community Cloud Linux**), keeping one
+authoritative list with no drift, while the root `requirements.txt` (full
+pipeline stack) stays for local development, `make install` and CI. Whether the
+demo set is actually what gets installed, and whether PySpark, confluent-kafka,
+boto3 and psycopg2-binary are absent, can only be confirmed from the first
+build log — the hosted dependency selection is not claimed to work until then.
+
+Honesty boundary: the entrypoint and its suite were verified on Windows with
+Python 3.11.9 (pytest `AppTest` renders plus a headless `streamlit run
+streamlit_cloud/streamlit_app.py` start with `OIP_DEMO_MODE` unset, and a
+subprocess test that runs the entrypoint with the repository root removed from
+`sys.path` to prove it re-inserts the root). That proves the entrypoint reaches
+the dashboard without `ModuleNotFoundError`; it does not prove the hosted
+dependency selection. The Linux Community Cloud build can only be confirmed by
+the first actual deployment: after pressing "Deploy", read the build log to
+confirm it installs from `streamlit_cloud/requirements.txt` (not the root
+`requirements.txt`), that the six intended demo dependencies (streamlit, plotly,
+pandas, sqlalchemy, redis, pytest) are present, and that the full-pipeline
+packages (PySpark, confluent-kafka, boto3, psycopg2-binary) are absent, then
+confirm the live page renders the synthetic banner. CI (`ubuntu-latest`,
+Python 3.11) has run the full `requirements.txt` install and the self-contained
+suites green for the dashboard tiers, but that is not the Cloud environment.
 
 ---
 
@@ -792,10 +862,10 @@ M7 keeps cooldown state in PostgreSQL `alerts_serving` rather than in these keys
 
 ## Testing and verification
 
-`tests/` collects **310 tests** in two materially different tiers. `python -m
-pytest tests/ --collect-only -q` collects all 310 with no collection errors.
+`tests/` collects **322 tests** in two materially different tiers. `python -m
+pytest tests/ --collect-only -q` collects all 322 with no collection errors.
 
-**Self-contained suites (194 collected)** — run by `python main.py verify` and by CI:
+**Self-contained suites (206 collected)** — run by `python main.py verify` and by CI:
 
 | Suite | Covers | Requires |
 |---|---|---|
@@ -805,16 +875,17 @@ pytest tests/ --collect-only -q` collects all 310 with no collection errors.
 | `tests/unit/test_dashboard_demo.py` (34) | synthetic demo sample, contract round trip, disclosure, fail-safe flag, demo render | none |
 | `tests/unit/test_dashboard_phase2c.py` (20) | Phase 2C insight arithmetic and real filter-widget recompute | none |
 | `tests/unit/test_dashboard_replay.py` (42) | scripted synthetic replay: predefined snapshots, clock progression, render/filters, disclosure | none |
+| `tests/unit/test_cloud_entrypoint.py` (12) | Community Cloud entry point: pinned synthetic mode over any ambient flag, client-free startup, delegation, dependency-file arrangement, and the repository-root `sys.path` workaround proven in a neutral subprocess | none |
 | `tests/unit/test_observability.py` (23) | M9 metrics, protocol, health | loopback HTTP only |
 | `tests/unit/test_verify.py` (5) | the verification dispatcher | none |
 
-The four dashboard suites above account for 140 of the 194 collected tests; the
-remaining 54 are the Spark, observability and dispatcher suites.
+The four dashboard suites above account for 140 of the 206 collected tests; the
+remaining 66 are the Spark, observability, Cloud-entry and dispatcher suites.
 
 No Kafka, Spark cluster, MinIO, PostgreSQL or Redis service, no credentials and
 no network beyond loopback are contacted. One M9 baseline-integrity test
 self-skips in this repository because its private `milestone9_evidence/` bundle
-is intentionally not published (193 therefore actually execute on Linux, 190
+is intentionally not published (205 therefore actually execute on Linux, 202
 where the Windows `winutils.exe` prerequisite below is absent).
 
 **Windows Spark prerequisites.** The two local-Spark suites need Java 17 and a
@@ -852,14 +923,19 @@ executed inside the Linux verification container with the full local stack up;
 they are historical evidence, not results any host reproduces by default.
 
 The self-contained tier was **freshly re-executed at this commit** on
-2026-10-11 on a Windows 11 (build 26300) host — repository commit `2841c0e`,
-the project `.venv` Python 3.11.9, Java 17.0.19 LTS, `HADOOP_HOME` unset.
-`python main.py verify` produced **190 passed, 4 skipped, 0 failed** in 510 s
-across the 194 collected tests. The four skips are the one M9
+2026-10-11 on a Windows 11 (build 26300) host — repository commit `05bba38`
+plus the Cloud entry-point changes (including the two new subprocess path
+tests), the project `.venv` Python 3.11.9, Java 17.0.19 LTS, `HADOOP_HOME`
+unset.
+`python main.py verify` produced **202 passed, 4 skipped, 0 failed** in 339 s
+across the 206 collected tests. The four skips are the one M9
 baseline-integrity self-skip and the three Windows `winutils.exe`
 local-filesystem Gold persistence tests described above; no assertion was
-weakened and no test was removed from the run set. This is one execution, not a
-repeated-run claim.
+weakened and no test was removed from the run set. An earlier run of the same
+tree, executed while other local processes were loading the machine, showed one
+transient Spark `Python worker failed to connect back` task failure in
+`test_gold.py`; that test passed on isolated rerun and in the clean full run
+quoted here. This is one execution, not a repeated-run claim.
 
 As labelled history, the same host recorded two 189-test runs in which five
 Streamlit render tests failed and one 189-test run that passed cleanly shortly
@@ -868,8 +944,8 @@ before commit `2841c0e` made dashboard render state hermetic on the test side
 39 → 44 collected). Those earlier logs are git-ignored local artifacts and are
 cited only as provenance for that change.
 
-On Linux the three winutils-gated tests execute, so the tier is 194 collected,
-193 run and 1 self-skipped. GitHub Actions `unit-tests` **succeeded** on
+On Linux the three winutils-gated tests execute, so the tier is 206 collected,
+205 run and 1 self-skipped. GitHub Actions `unit-tests` **succeeded** on
 `ubuntu-latest` for commit `2841c0e` (run #6, total duration 2m 26s; the
 workflow provisions Python 3.11 and Java 17 and runs the same
 `python main.py verify` command). The overall conclusion is the only CI figure

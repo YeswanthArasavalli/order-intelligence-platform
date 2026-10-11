@@ -1,0 +1,21 @@
+# =============================================================================
+# Order Intelligence Platform — Streamlit Community Cloud dependencies
+# =============================================================================
+# Community Cloud supports a requirements file in the repository root OR beside
+# the app entrypoint, but the docs do NOT establish precedence when both exist
+# (see https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies).
+# This file sits beside the entrypoint with the INTENT that the hosted app
+# installs it instead of the root requirements.txt (full pipeline stack —
+# PySpark, confluent-kafka, boto3, psycopg2, faker, Prometheus). That precedence
+# is an unverified assumption until the first build log confirms which file was
+# installed; root requirements.txt stays untouched for local development and CI.
+#
+# The single include keeps one authoritative pin list: the demo set lives in
+# requirements-demo.txt at the repository root, so the hosted environment can
+# not drift from the locally verified demo environment. Resolving the relative
+# '-r ../requirements-demo.txt' path is verified locally but not yet proven on
+# Community Cloud Linux. No secret or credential is needed to start or operate
+# the synthetic dashboard.
+# =============================================================================
+
+-r ../requirements-demo.txt

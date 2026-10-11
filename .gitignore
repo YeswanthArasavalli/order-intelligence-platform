@@ -4,6 +4,8 @@
 
 # Environment — NEVER commit .env (contains secrets)
 .env
+# Streamlit secrets — local development only; Community Cloud uses the settings UI
+.streamlit/secrets.toml
 
 # Python
 __pycache__/
