@@ -46,11 +46,16 @@ Milestone 9 is **PASS and frozen** (2026-10-04): 202 passing tests (179 frozen t
 local serving stack reachable — historical, environment-specific evidence, not a
 native result of any single host — plus real Prometheus scrapes, three provisioned
 Grafana dashboards, failure/restart verification and passing M1–M8 runtime
-regressions. In this public repository, 91 tests (including the verification
-dispatcher added 2026-10-09) are self-contained via `python main.py verify`; the
-other 116 require a running PostgreSQL/Redis stack, and the M9 baseline-integrity
-test skips because its private `milestone9_evidence/` bundle is not published.
-See README 'Testing and verification'.
+regressions. In this public repository the self-contained tier now collects 221
+tests, run via `python main.py verify`; the other 116 service-dependent tests
+require a running PostgreSQL/Redis stack, and the M9 baseline-integrity test
+skips because its private `milestone9_evidence/` bundle is not published. The
+`tests/` directory collects 337 tests overall (221 self-contained + 116
+service-dependent), and the current recorded `python main.py verify` run is 217
+passed, 4 skipped, 0 failed across the 221-tier tests. An earlier count of 91
+self-contained tests (recorded when the verification dispatcher was added
+2026-10-09) is superseded and must not be read as the current inventory. See
+README 'Testing and verification' for the authoritative, current figures.
 See `milestone9_observability_report.md` and `observability/CONTRACT.md`. The
 45 bounded operational metric families observe existing lifecycles and read-only
 metadata. Twelve files have minimal instrumentation with unchanged business AST;
