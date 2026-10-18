@@ -1,7 +1,7 @@
 # Order Intelligence Platform
 
 > **Real-time order and revenue intelligence platform**  
-> Built with Apache Kafka (KRaft), Apache Spark Structured Streaming, MinIO Data Lake (Bronze/Silver/Gold), PostgreSQL, Redis, Prometheus, and Grafana.
+> The repository implements a broader streaming architecture built with Apache Kafka (KRaft), Apache Spark Structured Streaming, MinIO Data Lake (Bronze/Silver/Gold), PostgreSQL, Redis, Prometheus, and Grafana. The hosted Streamlit application is a synthetic-data demonstration of this dashboard — not a live Kafka/Spark production pipeline.
 
 [![Architecture](https://img.shields.io/badge/Architecture-Medallion-gold)](#architecture)
 [![Kafka](https://img.shields.io/badge/Kafka-3.7%20KRaft-blue)](https://kafka.apache.org)
@@ -380,18 +380,18 @@ scan is not vacuous).
 
 This deployment is a **synthetic-data portfolio demo, not a live pipeline**. The
 hosted page is the unchanged dashboard in fixed demo mode, with the visible
-`Synthetic demo data — not a live pipeline.` banner on every view. Deployment
-inputs (the entrypoint and its demo behavior are verified locally on Windows;
-the hosted build itself is confirmed only by the first Community Cloud build
-log):
+`Synthetic demo data — not a live pipeline.` banner on every view. The hosted
+demo was observed loading successfully with that banner on 2026-10-18; the
+deployment inputs the build actually used are confirmed only from an
+authenticated Community Cloud build log (not inspected to date):
 
 | Setting | Value |
 |---|---|
 | Repository | `https://github.com/YeswanthArasavalli/order-intelligence-platform` |
 | Branch | `main` |
 | Entrypoint path | `streamlit_cloud/streamlit_app.py` |
-| Python version | Target **3.11** (3.11.9 is the tested interpreter; **3.12** is the documented Community Cloud default). The version is chosen only in the "Advanced settings" dropdown at deploy time and **cannot be changed after deployment** — Streamlit's own docs require deleting and redeploying the app. `3.14` is **not usable** with these pins: `pandas==2.2.3` publishes no cp314 wheel, so the declared demo set cannot install there (see the `requirements-demo.txt` compatibility note). Then verify the version in the build log. |
-| Dependencies | `streamlit_cloud/requirements.txt` (a one-line include of the root `requirements-demo.txt`). Community Cloud supports a requirements file beside the entrypoint, but which file it installs when both a root and an entrypoint file exist is **not yet verified** — the first build log must confirm it. |
+| Python version | Target **3.11** (3.11.9 is the tested interpreter; **3.12** is the documented Community Cloud default). The version is chosen only in the "Advanced settings" dropdown at deploy time and **cannot be changed after deployment** — Streamlit's own docs require deleting and redeploying the app. `3.14` is **not usable** with these pins: `pandas==2.2.3` publishes no cp314 wheel, so the declared demo set cannot install there (see the `requirements-demo.txt` compatibility note). Then verify the version in the build log — the authoritative configured version has not been confirmed in Cloud Settings. |
+| Dependencies | `streamlit_cloud/requirements.txt` (a one-line include of the root `requirements-demo.txt`). Community Cloud supports a requirements file beside the entrypoint, but which file it installs when both a root and an entrypoint file exist is **not yet verified** — an authenticated build log must confirm it. |
 | Secrets / environment variables | **None required** — do not paste pipeline credentials; the demo reads no source |
 
 `streamlit_cloud/streamlit_app.py` is a thin entrypoint, not a second
@@ -418,8 +418,9 @@ locally verified but **not yet proven on Community Cloud Linux**), keeping one
 authoritative list with no drift, while the root `requirements.txt` (full
 pipeline stack) stays for local development, `make install` and CI. Whether the
 demo set is actually what gets installed, and whether PySpark, confluent-kafka,
-boto3 and psycopg2-binary are absent, can only be confirmed from the first
-build log — the hosted dependency selection is not claimed to work until then.
+boto3 and psycopg2-binary are absent can only be confirmed from an authenticated
+build log — the hosted demo rendering proves the app works, not which set was
+installed.
 
 Honesty boundary: the entrypoint and its suite were verified on Windows with
 Python 3.11.9 (pytest `AppTest` renders plus a headless `streamlit run
@@ -427,13 +428,15 @@ streamlit_cloud/streamlit_app.py` start with `OIP_DEMO_MODE` unset, and a
 subprocess test that runs the entrypoint with the repository root removed from
 `sys.path` to prove it re-inserts the root). That proves the entrypoint reaches
 the dashboard without `ModuleNotFoundError`; it does not prove the hosted
-dependency selection. The Linux Community Cloud build can only be confirmed by
-the first actual deployment: after pressing "Deploy", read the build log to
-confirm it installs from `streamlit_cloud/requirements.txt` (not the root
-`requirements.txt`), that the six intended demo dependencies (streamlit, plotly,
-pandas, sqlalchemy, redis, pytest) are present, and that the full-pipeline
-packages (PySpark, confluent-kafka, boto3, psycopg2-binary) are absent, then
-confirm the live page renders the synthetic banner. CI (`ubuntu-latest`,
+dependency selection. The hosted demo has been observed running
+(live render with the synthetic banner, 2026-10-18), but successful rendering
+does not show which requirements file Cloud installed or which interpreter it
+used. Read the build log to confirm it installs from
+`streamlit_cloud/requirements.txt` (not the root `requirements.txt`), that the
+six intended demo dependencies (streamlit, plotly, pandas, sqlalchemy, redis,
+pytest) are present, and that the full-pipeline packages (PySpark,
+confluent-kafka, boto3, psycopg2-binary) are absent; the live-page synthetic
+banner render itself was already observed on 2026-10-18. CI (`ubuntu-latest`,
 Python 3.11) has run the full `requirements.txt` install and the self-contained
 suites green for the dashboard tiers, but that is not the Cloud environment.
 
