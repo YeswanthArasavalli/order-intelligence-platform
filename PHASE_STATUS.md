@@ -52,9 +52,18 @@ require a running PostgreSQL/Redis stack, and the M9 baseline-integrity test
 skips because its private `milestone9_evidence/` bundle is not published; 74
 of those service-dependent tests (the M4/M5/M7 suites) run in the GitHub
 Actions `service-integration` job against disposable PostgreSQL 16/Redis 7
-service-container state, while the 42 M8 notification tests remain outside
-CI until their retained certified-fixture dependency is removed. The
-`tests/` directory collects 337 tests overall (221 self-contained + 116
+service-container state — first published run
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
+(2026-10-18, branch `ci/service-integration`, commit
+`e4096f79bbd6472b46b383bd11dde43c693dcc5c`), reported completed/success with
+both the `unit-tests` and `service-integration` jobs successful, the
+collection gate confirming exactly 74 collected tests, and the pytest
+command reported as exiting successfully; the verbatim pytest pass/skip
+breakdown was not verified because GitHub's raw Actions logs require
+authentication — no "74 passed, 0 skipped" claim is made — while the 42 M8
+notification tests remain outside CI, outstanding until their retained
+certified-fixture dependency is removed.
+The `tests/` directory collects 337 tests overall (221 self-contained + 116
 service-dependent), and the current recorded `python main.py verify` run is 217
 passed, 4 skipped, 0 failed across the 221-tier tests. An earlier count of 91
 self-contained tests (recorded when the verification dispatcher was added
@@ -97,6 +106,16 @@ service containers). The remaining work for full closure is: per-service
 Dockerfiles for the streaming jobs themselves, any build/deploy automation
 (currently deliberately out of scope), and CI coverage of the 42 M8
 notification tests, which is blocked until that suite stops depending on the
-unpublished retained certified M7 fixture. The project is fully runnable
-in the current state using docker-compose.yml for infrastructure and
+unpublished retained certified M7 fixture. The `service-integration` job's
+first published run —
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
+(2026-10-18, branch `ci/service-integration`, commit
+`e4096f79bbd6472b46b383bd11dde43c693dcc5c`) — is reported completed with
+overall success (both jobs successful; collection gate confirmed exactly 74
+collected tests; pytest exited successfully per the existing run report; the
+verbatim pass/skip breakdown was not verified from the available log
+evidence). It evidences only the 74 M4/M5/M7 suites on disposable CI service
+containers — not production readiness or full end-to-end pipeline coverage.
+The M8 notification-test gap above remains outstanding. The project is fully
+runnable in the current state using docker-compose.yml for infrastructure and
 running Python services directly (python main.py <service>).

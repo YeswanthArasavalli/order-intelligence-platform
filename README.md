@@ -984,6 +984,11 @@ parameter) while keeping every notification idempotency and determinism
 assertion intact. This job adds no build, deploy or hosted-service
 automation, and its green run would prove only the 74 executed suites on
 the CI services — not the full Kafka→Spark→MinIO pipeline end to end.
+(The first such green run —
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
+— is recorded with its evidence limits under
+[Testing and verification](#testing-and-verification); the M8 exclusion
+above stands.)
 
 **Recorded history vs. what you can reproduce.** The 179-test (M8) and
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
@@ -1027,10 +1032,25 @@ workflow provisions Python 3.11 and Java 17 and runs the same
 `python main.py verify` command). The overall conclusion is the only CI figure
 claimed here — the per-test Linux pass/skip breakdown is not available from this
 environment, so no exact CI pass count is stated. The `service-integration`
-job is newly added and has no published run record yet; its first actual
-result (passes, failures, skips and any environmental limitations) will be
-recorded here only after a verified CI execution, and until then no green
-claim is made for it.
+job has since had its first published run: run
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
+(October 18, 2026, branch `ci/service-integration`, commit
+`e4096f79bbd6472b46b383bd11dde43c693dcc5c`) is reported as completed with
+overall success, including a successful `service-integration` job and a
+successful `unit-tests` job. The run page shows the job provisioned
+PostgreSQL 16 and Redis 7 service containers, its collection gate verified
+that exactly 74 tests were collected (`test_alerts.py` 40,
+`test_postgres_serving.py` 10, `test_redis_serving.py` 24), and the pytest
+command completed with exit status 0 per the existing run report. The
+verbatim pytest summary — the exact passed/skipped breakdown — was not
+verified from the available evidence, because GitHub's raw Actions logs
+require authentication; no "74 passed, 0 skipped" claim is made here. This
+run evidences only those 74 M4/M5/M7 suites against disposable CI service
+containers — not production readiness, complete end-to-end functionality, or
+full integration coverage. The 42 M8 notification tests remain outside CI,
+outstanding until that suite is made self-seeding via the M7 evaluator's
+supported `source` parameter into an isolated disposable schema/environment
+(a future task, after inspecting the actual implementation).
 
 ---
 
