@@ -49,10 +49,11 @@ Grafana dashboards, failure/restart verification and passing M1–M8 runtime
 regressions. In this public repository the self-contained tier now collects 221
 tests, run via `python main.py verify`; the other 116 service-dependent tests
 require a running PostgreSQL/Redis stack, and the M9 baseline-integrity test
-skips because its private `milestone9_evidence/` bundle is not published; 74
-of those service-dependent tests (the M4/M5/M7 suites) run in the GitHub
-Actions `service-integration` job against disposable PostgreSQL 16/Redis 7
-service-container state — first published run
+skips because its private `milestone9_evidence/` bundle is not published; the
+GitHub Actions `service-integration` job is configured for all 116 in the
+local workflow, and its only published run to date executed the earlier
+74-test (M4/M5/M7) version against disposable PostgreSQL 16/Redis 7
+service-container state — that first published run
 [39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
 (2026-10-18, branch `ci/service-integration`, commit
 `e4096f79bbd6472b46b383bd11dde43c693dcc5c`), reported completed/success with
@@ -61,8 +62,26 @@ collection gate confirming exactly 74 collected tests, and the pytest
 command reported as exiting successfully; the verbatim pytest pass/skip
 breakdown was not verified because GitHub's raw Actions logs require
 authentication — no "74 passed, 0 skipped" claim is made — while the 42 M8
-notification tests remain outside CI, outstanding until their retained
-certified-fixture dependency is removed.
+notification tests have since been made self-seeding in code (the fixture now
+publishes an isolated `m7_source_*` snapshot, runs the frozen M7 evaluator into
+an isolated `m7_m8_*` alert schema and binds the service to it via its supported
+`source` parameter and a unique `m8_test_*` target, and its best-effort
+teardown drops each of its own three generated schemas in its own separate
+transaction) and are added to the `service-integration`
+job's 116-test collection/execution commands. That expanded 116-test job has
+**not** had an authorized remote CI run; the 42 M8 tests and the full
+four-suite combination have, however, since been executed locally against a
+freshly provisioned disposable PostgreSQL 16.15 / Redis 7.4.11 pair
+(loopback-bound ports, least-privilege non-superuser test login): the focused
+outage-and-recovery test passed (1 passed), the full M8 suite passed (42
+passed), and the four-suite regression passed 116/116 (0 failed, 0 skipped, 0
+xfailed, 0 errors; pytest exit code 0) with exactly 116 collected. Generated
+test schemas were dropped by fixture teardown and the disposable Redis
+keyspace was empty afterward; the temporary resources were removed by exact
+name. Local evidence logs are retained under the gitignored
+`logs/phase2h_evidence/` directory. Local success does not prove the hosted
+workflow passes — remote CI verification of the 116-test job remains
+outstanding.
 The `tests/` directory collects 337 tests overall (221 self-contained + 116
 service-dependent), and the current recorded `python main.py verify` run is 217
 passed, 4 skipped, 0 failed across the 221-tier tests. An earlier count of 91
@@ -100,13 +119,20 @@ absent: `docker-compose.yml` provides the full infrastructure stack with
 healthchecks, `deployment/local/Dockerfile` and `observability/Dockerfile`
 cover the packaged local runtime and the metrics exporter, and
 `.github/workflows/ci.yml` runs two jobs — `unit-tests` (the self-contained
-suites via `python main.py verify`) and `service-integration` (the 74
-reproducible service-dependent M4/M5/M7 tests on ephemeral PostgreSQL/Redis
+suites via `python main.py verify`) and `service-integration` (the
+reproducible service-dependent M4/M5/M7 suites — and, since the M8
+self-seeding change, the M4/M5/M7/M8 suites — on ephemeral PostgreSQL/Redis
 service containers). The remaining work for full closure is: per-service
 Dockerfiles for the streaming jobs themselves, any build/deploy automation
-(currently deliberately out of scope), and CI coverage of the 42 M8
-notification tests, which is blocked until that suite stops depending on the
-unpublished retained certified M7 fixture. The `service-integration` job's
+(currently deliberately out of scope), and an authorized CI run of the
+expanded 116-test `service-integration` job. The M8 fixture seeds its own
+source and its generated events no longer depend on retained
+`alerts_serving` rows (a source-inspection property of the test code, not a
+behavioral one), and the 42 M8 tests have since been executed and passed in a
+verified local disposable environment (evidence under
+`logs/phase2h_evidence/`), so a local M8 pass is claimed on that evidence;
+the 116-test job itself has still not been executed in CI, and no CI pass is
+claimed. The `service-integration` job's
 first published run —
 [39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
 (2026-10-18, branch `ci/service-integration`, commit
@@ -116,6 +142,11 @@ collected tests; pytest exited successfully per the existing run report; the
 verbatim pass/skip breakdown was not verified from the available log
 evidence). It evidences only the 74 M4/M5/M7 suites on disposable CI service
 containers — not production readiness or full end-to-end pipeline coverage.
-The M8 notification-test gap above remains outstanding. The project is fully
+The M8 self-seeding and 116-test CI integration described above is
+implemented and has since been executed locally: in a verified local
+disposable environment the four suites collected exactly 116 tests and passed
+116 (0 failed, 0 skipped, 0 xfailed, 0 errors; pytest exit code 0), with gitignored
+logs under `logs/phase2h_evidence/`; the job has not yet been executed in CI.
+The project is fully
 runnable in the current state using docker-compose.yml for infrastructure and
 running Python services directly (python main.py <service>).

@@ -54,10 +54,15 @@ It is built phase-by-phase, with each phase reviewed against Staff Data Engineer
 > implementation, not a certified production deployment. High availability,
 > disaster recovery, cloud/on-prem certification and load testing are out of
 > scope; CI/CD is a two-tier GitHub Actions workflow: the self-contained
-> `unit-tests` job and a `service-integration` job that runs the 74
-> reproducible service-dependent suites against throwaway PostgreSQL/Redis
-> service containers (no build, deploy or hosted-service automation). CI
-> proves only the tests it actually executes; it is not proof of an
+> `unit-tests` job and a `service-integration` job that runs the reproducible
+> service-dependent suites against throwaway PostgreSQL/Redis service containers
+> (no build, deploy or hosted-service automation). The workflow now also wires in
+> the self-seeding M8 notification suite (a 116-test collection gate), but that
+> expanded job has **not yet had an authorized remote CI run** — the only
+> executed `service-integration` run to date collected and ran the 74 M4/M5/M7
+> suites (historical evidence only; the 116-test job was locally executed and
+> passed separately, which does not prove the hosted workflow).
+> CI proves only the tests it actually executes; it is not proof of an
 > end-to-end operational pipeline. No end-to-end exactly-once delivery guarantee
 > is claimed; the data-quality/DLQ path is documented as at-least-once.
 ### Verified pipeline status
@@ -948,13 +953,14 @@ them on Windows, install a Hadoop winutils build and set `HADOOP_HOME` to its
 root (with `%HADOOP_HOME%\bin\winutils.exe` present). On Linux — including the
 CI `ubuntu-latest` runner — the prerequisite is not needed and all three run.
 
-**Service-dependent suites (116 tests)** — 74 run in the CI
-`service-integration` job; the 42 M8 notification tests are not run by CI:
+**Service-dependent suites (116 tests)** — the CI `service-integration` job
+now targets all 116 (it previously ran only the 74 M4/M5/M7 tests; the
+expanded 116-test job has not yet had an authorized remote CI run):
 
 | Suite | Tests | Requires |
 |---|---|---|
 | `tests/unit/test_alerts.py` | 40 | running PostgreSQL (M7 persistence) |
-| `tests/unit/test_notifications.py` | 42 | running PostgreSQL + loopback HTTP receiver |
+| `tests/unit/test_notifications.py` | 42 | running PostgreSQL (self-seeded M7 fixture) + loopback HTTP receiver |
 | `tests/unit/test_postgres_serving.py` | 10 | running PostgreSQL |
 | `tests/unit/test_redis_serving.py` | 24 | running PostgreSQL + Redis |
 
@@ -965,30 +971,54 @@ excluded from `python main.py verify`.
 
 **The CI `service-integration` job.** `.github/workflows/ci.yml` adds a second
 job that starts ephemeral GitHub Actions service containers (`postgres:16` and
-`redis:7`, CI-only dummy credentials) and runs exactly
-`tests/unit/test_alerts.py` (40), `tests/unit/test_postgres_serving.py` (10)
-and `tests/unit/test_redis_serving.py` (24) — 74 tests. A collection gate
-fails the job unless exactly 74 tests are collected; there are no
+`redis:7`, CI-only dummy credentials) and runs
+`tests/unit/test_alerts.py` (40), `tests/unit/test_notifications.py` (42),
+`tests/unit/test_postgres_serving.py` (10) and
+`tests/unit/test_redis_serving.py` (24) — 116 tests. A collection gate
+fails the job unless exactly 116 tests are collected; there are no
 `skipIf`-style guards in these suites, so an unreachable PostgreSQL or Redis
 errors the fixtures and fails the run rather than silently skipping. Each
 suite creates uniquely-named disposable schemas (`m4_test_*`, `m5_test_*`,
-`m7_source_*`/`m7_test_*`) and Redis namespaces (`oip:m5:test-*`) and drops
-them at teardown, so the job needs no retained state and touches no shared
-data. `tests/unit/test_notifications.py` (42) is deliberately excluded:
-its fixture reads the retained certified M7 fixture rows in
-`alerts_serving.alert_events`, which live only in the private local Docker
-volume and are not published with this repository. A separate future task
-should make the M8 suite self-seeding by running the genuine M7 evaluator
-into a disposable source schema (the service already accepts a `source`
-parameter) while keeping every notification idempotency and determinism
-assertion intact. This job adds no build, deploy or hosted-service
-automation, and its green run would prove only the 74 executed suites on
-the CI services — not the full Kafka→Spark→MinIO pipeline end to end.
-(The first such green run —
+`m7_source_*`/`m7_test_*`, `m7_m8_*`/`m8_test_*`) and Redis namespaces
+(`oip:m5:test-*`) and drops them at teardown, so the job needs no retained
+state and, by source inspection of the suites, performs no reads of shared or
+retained certified data. The M8 suite
+(`tests/unit/test_notifications.py`, 42) is now self-seeding: its fixture
+publishes a disposable `m7_source_*` snapshot and runs the genuine frozen M7
+evaluator into an isolated `m7_m8_*` alert schema, then binds
+`NotificationService` to that generated source via its supported `source`
+parameter and a unique `m8_test_*` target schema, so the fixture seeds its own
+source and its generated events no longer depend on retained
+`alerts_serving.alert_events` rows; every service instance that can reach a
+read is bound to a generated schema, and the two negative paths associated
+with the production default source (the unreachable-engine construction,
+whose first transaction fails before any schema-level read, and the CLI
+redaction test, whose provider validation fails before the service is ever
+constructed) are established by source inspection to never consult a
+schema; the fixture's teardown drops each of its own three uniquely-named
+schemas in its own transaction — so one failed drop cannot roll back the
+others — including on partial-setup and test-body failures, and behavioral
+isolation is claimed only once the suite actually executes. That execution
+has since happened locally: on 2026-10-18 the suites ran against a freshly
+provisioned disposable PostgreSQL 16.15 / Redis 7.4.11 pair (loopback-bound
+ports, least-privilege non-superuser test login) — the focused
+outage-and-recovery test passed (1), the full M8 suite passed (42), and the
+four-suite regression passed 116/116 with 0 failed, 0 skipped, 0 xfailed and 0
+errors (pytest exit code 0), with exactly 116 collected; the generated test
+schemas were cleaned up and the disposable Redis keyspace was empty afterward,
+and the temporary resources were removed by exact name. Gitignored evidence
+logs live under `logs/phase2h_evidence/`. This local validation is distinct
+from the hosted workflow: no authorized remote CI run of the 116-test job has
+been executed yet, and local success does not prove the hosted workflow
+passes.
+This job adds no build, deploy or hosted-service automation, and a future
+green 116-test run would prove only those executed suites on the CI services
+— not the full Kafka→Spark→MinIO pipeline end to end.
+(The only published run to date —
 [39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
-— is recorded with its evidence limits under
-[Testing and verification](#testing-and-verification); the M8 exclusion
-above stands.)
+— executed the earlier 74-test version of this job and is recorded with its
+evidence limits under
+[Testing and verification](#testing-and-verification).)
 
 **Recorded history vs. what you can reproduce.** The 179-test (M8) and
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
@@ -1047,10 +1077,16 @@ verified from the available evidence, because GitHub's raw Actions logs
 require authentication; no "74 passed, 0 skipped" claim is made here. This
 run evidences only those 74 M4/M5/M7 suites against disposable CI service
 containers — not production readiness, complete end-to-end functionality, or
-full integration coverage. The 42 M8 notification tests remain outside CI,
-outstanding until that suite is made self-seeding via the M7 evaluator's
-supported `source` parameter into an isolated disposable schema/environment
-(a future task, after inspecting the actual implementation).
+full integration coverage. The 42 M8 notification tests have since been made
+self-seeding in code (fixture publishes an isolated `m7_source_*` snapshot,
+runs the frozen M7 evaluator into an isolated `m7_m8_*` alert schema and
+binds the service to it via `source`) and are now part of the workflow's
+116-test collection/execution commands, but no authorized remote CI run of
+the 116-test job has been executed yet; a local behavioral run of the M8
+suite has since been performed and passed (42/42, with the four-suite
+regression at 116/116 on a freshly provisioned disposable PostgreSQL/Redis
+pair — gitignored evidence under `logs/phase2h_evidence/`), which validates
+the suites locally but does not prove the hosted workflow passes.
 
 ---
 
@@ -1153,10 +1189,15 @@ M1-M9 and Phase C are complete and frozen.
 **There is no M10.** No further milestones are planned in this repository.
 **CI/CD is deliberately narrow** - `.github/workflows/ci.yml` runs two jobs:
 `unit-tests` executes `python main.py verify` (the self-contained suites) and
-`service-integration` executes the 74 reproducible service-dependent suites
-(M4/M5/M7) against ephemeral PostgreSQL 16/Redis 7 service containers; the 42
-M8 notification tests remain excluded until their retained-fixture dependency
-is removed. There is no build, deploy or hosted-service automation, and no
+`service-integration` is configured in the local workflow to execute the 116
+reproducible service-dependent suites (M4/M5/M7 plus the self-seeding M8
+notification suite) against ephemeral PostgreSQL 16/Redis 7 service
+containers. The only published `service-integration` run to date validated
+the earlier 74-test (M4/M5/M7) version of that job; the expanded 116-test job
+has not yet run remotely, and the 42 M8 tests have since been behaviorally
+validated locally against a disposable PostgreSQL/Redis instance (see
+[Testing and verification](#testing-and-verification)) — a local result that
+remains distinct from the still-outstanding authorized remote CI run. There is no build, deploy or hosted-service automation, and no
 deployment pipeline is claimed.
 
 ---

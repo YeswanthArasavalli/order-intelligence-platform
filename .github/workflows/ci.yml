@@ -4,16 +4,21 @@
 #    It executes `python main.py verify` (scripts/verify.py): the suites that
 #    need no Docker, Kafka, Spark cluster, MinIO, PostgreSQL or Redis services
 #    and no credentials or secrets.
-# 2. `service-integration` — the 74 reproducible service-dependent suites
-#    (M4 PostgreSQL serving, M5 Redis serving, M7 alert evaluation) executed
-#    against throwaway GitHub Actions service containers (postgres:16, redis:7)
-#    with CI-only dummy credentials. A collection gate fails the job unless
-#    exactly 74 tests are collected, so missing services or changed suites
-#    surface as failures, never as silent skips.
-#    Excluded by design: the 42-test M8 notification suite
-#    (tests/unit/test_notifications.py) reads the retained, unpublished
-#    certified M7 fixture in `alerts_serving.alert_events` and cannot run
-#    against fresh state; making it self-seeding is a separate future task.
+# 2. `service-integration` — the 116 reproducible service-dependent suites
+#    (M4 PostgreSQL serving, M5 Redis serving, M7 alert evaluation and the
+#    self-seeding M8 notification suite) executed against throwaway GitHub
+#    Actions service containers (postgres:16, redis:7) with CI-only dummy
+#    credentials. A collection gate fails the job unless exactly 116 tests are
+#    collected, so missing services or changed suites surface as failures,
+#    never as silent skips.
+#    M8 (tests/unit/test_notifications.py) is self-seeding: its fixture
+#    publishes a disposable m7_source_* snapshot, runs the frozen M7 evaluator
+#    into an isolated m7_m8_* alert schema and binds the notification service
+#    to that generated source via its supported `source` parameter, so the
+#    fixture seeds its own source and its generated events no longer depend on
+#    retained local M7 fixture rows in `alerts_serving`. That isolation is a
+#    source-inspection property of the test code; behavioral isolation and the
+#    116-test job itself are only proven once this job actually runs.
 #
 # There is no build, deploy or hosted-service automation in this repository.
 # CI proves only the tests it actually executes; it is not proof of a
@@ -53,11 +58,13 @@ jobs:
   service-integration:
     # Reproducible service-dependent tier: M7 alert evaluation (tests/unit/
     # test_alerts.py, 40), M4 PostgreSQL serving (tests/unit/
-    # test_postgres_serving.py, 10) and M5 Redis serving (tests/unit/
-    # test_redis_serving.py, 24). Each suite creates uniquely-named disposable
-    # schemas (m4_test_*, m5_test_*, m7_source_*/m7_test_*) and Redis
-    # namespaces (oip:m5:test-*) and drops them on teardown; nothing here
-    # touches shared, production or retained certified state.
+    # test_postgres_serving.py, 10), M5 Redis serving (tests/unit/
+    # test_redis_serving.py, 24) and the self-seeding M8 notification suite
+    # (tests/unit/test_notifications.py, 42). Each suite creates uniquely-
+    # named disposable schemas (m4_test_*, m5_test_*, m7_source_*/m7_test_*,
+    # m7_m8_*/m8_test_*) and Redis namespaces (oip:m5:test-*) and drops them
+    # on teardown; by source inspection nothing here reads shared, production
+    # or retained certified state, and this job run is what proves it.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -110,12 +117,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Assert exactly 74 service-integration tests are collected
+      - name: Assert exactly 116 service-integration tests are collected
         run: |
-          line=$(python -m pytest tests/unit/test_alerts.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py --collect-only -q | tail -n 1)
+          line=$(python -m pytest tests/unit/test_alerts.py tests/unit/test_notifications.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py --collect-only -q | tail -n 1)
           echo "collection summary: $line"
-          echo "$line" | grep -qE '^74 tests collected' || {
-            echo "::error::expected exactly 74 collected tests (M7 40 + M4 10 + M5 24); got: $line"
+          echo "$line" | grep -qE '^116 tests collected' || {
+            echo "::error::expected exactly 116 collected tests (M7 40 + M8 42 + M4 10 + M5 24); got: $line"
             exit 1
           }
 
@@ -123,4 +130,4 @@ jobs:
       # exit status is the job status. Connection loss to either service
       # raises inside the fixtures and fails the run.
       - name: Run service-dependent suites against the CI PostgreSQL/Redis
-        run: python -m pytest -q tests/unit/test_alerts.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py
+        run: python -m pytest -q tests/unit/test_alerts.py tests/unit/test_notifications.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py
