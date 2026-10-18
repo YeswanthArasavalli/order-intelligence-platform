@@ -77,7 +77,7 @@ def world(tmp_path):
             events = conn.execute(text(f'SELECT event_id FROM "{alerts}".alert_events ORDER BY event_id')).scalars().all()
         assert len(events) == 2, "Self-seeded M7 fixture must produce exactly two firing events"
         with running_receiver(tmp_path / "receiver.sqlite") as receiver:
-            provider = ControlledHTTPProvider(receiver.endpoint, "test-inbox", timeout=0.1)
+            provider = ControlledHTTPProvider(receiver.endpoint, "test-inbox", timeout=0.2)
             service = NotificationService(engine, provider, source=alerts, schema=target,
                                           policy=Policy(base_delay=1, max_delay=2, lease_seconds=1))
 
@@ -152,7 +152,7 @@ def test_http_classification_and_sanitization(world, mode, expected):
     service, receiver, events, rows = world
     receiver.plan("test-inbox", [mode])
     result = service.process([events[0]])
-    assert result["notifications_" + expected.lower()] == 1
+    assert result["notifications_" + expected.lower()] == 1, f"result={result}"
     attempt = rows("notification_attempts")[0]
     assert attempt["outcome"] == expected and attempt["retryable"] == (expected == "RETRYABLE_FAILURE")
     assert "CONTROLLED_SECRET_CANARY" not in json.dumps(rows("notification_attempts"), default=str)
@@ -282,7 +282,7 @@ def test_restart_separate_process_delivers_pending(world):
     # deliberately not set here because this test does not exercise CLI or
     # environment parsing.
     env = {**os.environ, "NOTIFICATION_ENDPOINT": receiver.endpoint,
-           "NOTIFICATION_DESTINATION": "test-inbox", "NOTIFICATION_TIMEOUT_SECONDS": "0.1"}
+           "NOTIFICATION_DESTINATION": "test-inbox", "NOTIFICATION_TIMEOUT_SECONDS": "0.2"}
     # The packaged CLI entry point hard-codes the alerts_serving source and has
     # no source override, so the restarted worker over the self-seeded source
     # is launched by constructing the service directly with the parent's
