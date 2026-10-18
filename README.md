@@ -53,8 +53,12 @@ It is built phase-by-phase, with each phase reviewed against Staff Data Engineer
 > Compose environment on a single machine. This is a portfolio reference
 > implementation, not a certified production deployment. High availability,
 > disaster recovery, cloud/on-prem certification and load testing are out of
-> scope; CI/CD is limited to a minimal workflow that runs the self-contained
-> unit suites (no build, deploy or hosted-service automation). No end-to-end exactly-once delivery guarantee
+> scope; CI/CD is a two-tier GitHub Actions workflow: the self-contained
+> `unit-tests` job and a `service-integration` job that runs the 74
+> reproducible service-dependent suites against throwaway PostgreSQL/Redis
+> service containers (no build, deploy or hosted-service automation). CI
+> proves only the tests it actually executes; it is not proof of an
+> end-to-end operational pipeline. No end-to-end exactly-once delivery guarantee
 > is claimed; the data-quality/DLQ path is documented as at-least-once.
 ### Verified pipeline status
 
@@ -590,7 +594,7 @@ operational in this repository**; a forecast/ML detector remains a
 | Serialisation     | Apache Avro                      | —        | Schema-governed message format       |
 | Language          | Python                           | 3.11+    | All application code                 |
 | Containers        | Docker Compose                   | v2       | Local infrastructure                 |
-| CI/CD             | GitHub Actions                   | n/a      | Minimal workflow running the self-contained unit suites only |
+| CI/CD             | GitHub Actions                   | n/a      | Two-job workflow: self-contained unit suites plus a service-integration suite on PostgreSQL 16/Redis 7 service containers (no build or deploy automation) |
 
 ---
 
@@ -602,7 +606,11 @@ ORDER_CREATED → ORDER_PAID → ORDER_SHIPPED → ORDER_DELIVERED
       └→ ORDER_CANCELLED    ORDER_REFUNDED
 ```
 
-**Net revenue = SUM(ORDER_PAID.charged_amount) − SUM(ORDER_REFUNDED.refund_amount) − SUM(ORDER_CANCELLED[was_paid=true].amount)**
+**Net revenue = SUM(ORDER_PAID.amount) − SUM(ORDER_REFUNDED.amount) − SUM(ORDER_CANCELLED[was_paid=true].amount)**
+
+All three terms read the same Avro `amount` field of the respective event
+(`producer/schemas/order_event.avsc`); `streaming/GOLD_CONTRACT.md` defines
+`gross_revenue` as the sum of PAID amounts (charged after discounts).
 
 Revenue is recognised at `ORDER_PAID`, not `ORDER_CREATED`.
 
@@ -748,8 +756,8 @@ MinIO, PostgreSQL, Redis, Prometheus, Grafana). Container health is **not**
 proof that the streaming pipeline produced correct results, and the target
 prints per-check PASS/FAIL but always exits 0 — read its output, not its
 status code. `python main.py verify` runs the application-code suites listed
-in [Testing and verification](#testing-and-verification); that is also what CI
-runs.
+in [Testing and verification](#testing-and-verification); that is also what
+the CI `unit-tests` job runs.
 
 ---
 
@@ -940,7 +948,8 @@ them on Windows, install a Hadoop winutils build and set `HADOOP_HOME` to its
 root (with `%HADOOP_HOME%\bin\winutils.exe` present). On Linux — including the
 CI `ubuntu-latest` runner — the prerequisite is not needed and all three run.
 
-**Service-dependent suites (116 tests)** — not run by CI:
+**Service-dependent suites (116 tests)** — 74 run in the CI
+`service-integration` job; the 42 M8 notification tests are not run by CI:
 
 | Suite | Tests | Requires |
 |---|---|---|
@@ -953,6 +962,28 @@ Despite living under `tests/unit/`, these execute against the real local stack
 (`docker compose up -d postgres redis` with a filled `.env`) and create
 isolated disposable schemas/namespaces; they are integration-grade and are
 excluded from `python main.py verify`.
+
+**The CI `service-integration` job.** `.github/workflows/ci.yml` adds a second
+job that starts ephemeral GitHub Actions service containers (`postgres:16` and
+`redis:7`, CI-only dummy credentials) and runs exactly
+`tests/unit/test_alerts.py` (40), `tests/unit/test_postgres_serving.py` (10)
+and `tests/unit/test_redis_serving.py` (24) — 74 tests. A collection gate
+fails the job unless exactly 74 tests are collected; there are no
+`skipIf`-style guards in these suites, so an unreachable PostgreSQL or Redis
+errors the fixtures and fails the run rather than silently skipping. Each
+suite creates uniquely-named disposable schemas (`m4_test_*`, `m5_test_*`,
+`m7_source_*`/`m7_test_*`) and Redis namespaces (`oip:m5:test-*`) and drops
+them at teardown, so the job needs no retained state and touches no shared
+data. `tests/unit/test_notifications.py` (42) is deliberately excluded:
+its fixture reads the retained certified M7 fixture rows in
+`alerts_serving.alert_events`, which live only in the private local Docker
+volume and are not published with this repository. A separate future task
+should make the M8 suite self-seeding by running the genuine M7 evaluator
+into a disposable source schema (the service already accepts a `source`
+parameter) while keeping every notification idempotency and determinism
+assertion intact. This job adds no build, deploy or hosted-service
+automation, and its green run would prove only the 74 executed suites on
+the CI services — not the full Kafka→Spark→MinIO pipeline end to end.
 
 **Recorded history vs. what you can reproduce.** The 179-test (M8) and
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
@@ -995,7 +1026,11 @@ On Linux the three winutils-gated tests execute, so the tier is 212 collected,
 workflow provisions Python 3.11 and Java 17 and runs the same
 `python main.py verify` command). The overall conclusion is the only CI figure
 claimed here — the per-test Linux pass/skip breakdown is not available from this
-environment, so no exact CI pass count is stated.
+environment, so no exact CI pass count is stated. The `service-integration`
+job is newly added and has no published run record yet; its first actual
+result (passes, failures, skips and any environmental limitations) will be
+recorded here only after a verified CI execution, and until then no green
+claim is made for it.
 
 ---
 
@@ -1096,10 +1131,13 @@ M1-M9 and Phase C are complete and frozen.
 | Phase C | Local Docker packaging / sealed MinIO runtime verification | FROZEN |
 
 **There is no M10.** No further milestones are planned in this repository.
-**CI/CD is minimal by design** - `.github/workflows/ci.yml` runs only
-`python main.py verify` (the self-contained suites) on push and pull requests.
-There is no build, deploy or hosted-service automation, and no deployment
-pipeline is claimed.
+**CI/CD is deliberately narrow** - `.github/workflows/ci.yml` runs two jobs:
+`unit-tests` executes `python main.py verify` (the self-contained suites) and
+`service-integration` executes the 74 reproducible service-dependent suites
+(M4/M5/M7) against ephemeral PostgreSQL 16/Redis 7 service containers; the 42
+M8 notification tests remain excluded until their retained-fixture dependency
+is removed. There is no build, deploy or hosted-service automation, and no
+deployment pipeline is claimed.
 
 ---
 ## Phase 1 acceptance criteria

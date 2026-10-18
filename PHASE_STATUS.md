@@ -49,7 +49,11 @@ Grafana dashboards, failure/restart verification and passing M1–M8 runtime
 regressions. In this public repository the self-contained tier now collects 221
 tests, run via `python main.py verify`; the other 116 service-dependent tests
 require a running PostgreSQL/Redis stack, and the M9 baseline-integrity test
-skips because its private `milestone9_evidence/` bundle is not published. The
+skips because its private `milestone9_evidence/` bundle is not published; 74
+of those service-dependent tests (the M4/M5/M7 suites) run in the GitHub
+Actions `service-integration` job against disposable PostgreSQL 16/Redis 7
+service-container state, while the 42 M8 notification tests remain outside
+CI until their retained certified-fixture dependency is removed. The
 `tests/` directory collects 337 tests overall (221 self-contained + 116
 service-dependent), and the current recorded `python main.py verify` run is 217
 passed, 4 skipped, 0 failed across the 221-tier tests. An earlier count of 91
@@ -82,7 +86,17 @@ Verification containers were stopped at 17:58:47 UTC, retaining data and evidenc
 | 13    | CI/CD                      | ⬜ See notes |
 
 ## Notes
-Phase 12 (Dockerization) and Phase 13 (CI/CD) require adding Dockerfiles
-per service and GitHub Actions workflows. The project is fully runnable
+Phase 12 (Dockerization) and Phase 13 (CI/CD) are partially shipped, not
+absent: `docker-compose.yml` provides the full infrastructure stack with
+healthchecks, `deployment/local/Dockerfile` and `observability/Dockerfile`
+cover the packaged local runtime and the metrics exporter, and
+`.github/workflows/ci.yml` runs two jobs — `unit-tests` (the self-contained
+suites via `python main.py verify`) and `service-integration` (the 74
+reproducible service-dependent M4/M5/M7 tests on ephemeral PostgreSQL/Redis
+service containers). The remaining work for full closure is: per-service
+Dockerfiles for the streaming jobs themselves, any build/deploy automation
+(currently deliberately out of scope), and CI coverage of the 42 M8
+notification tests, which is blocked until that suite stops depending on the
+unpublished retained certified M7 fixture. The project is fully runnable
 in the current state using docker-compose.yml for infrastructure and
 running Python services directly (python main.py <service>).
