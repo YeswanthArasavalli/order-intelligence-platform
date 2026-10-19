@@ -29,9 +29,15 @@ on:
   push:
   pull_request:
 
+# Least-privilege token scope: this workflow only checks out code and runs tests
+# against throwaway service containers. No step publishes packages, deploys, or
+# writes to the repository, so read-only contents access is sufficient.
+permissions:
+  contents: read
+
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +71,7 @@ jobs:
     # m7_m8_*/m8_test_*) and Redis namespaces (oip:m5:test-*) and drops them
     # on teardown; by source inspection nothing here reads shared, production
     # or retained certified state, and this job run is what proves it.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
