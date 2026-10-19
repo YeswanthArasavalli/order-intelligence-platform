@@ -780,18 +780,22 @@ the CI `unit-tests` job runs.
 
 ## Startup sequence
 
-Services start in dependency order, enforced by Docker healthchecks:
+Services start in dependency order via Compose `depends_on`, using two different
+gates. Read the parenthetical on each line below: `service_healthy` waits until
+the dependency's healthcheck passes, whereas `service_started` only waits for the
+container to come up (no healthcheck gate). Services marked "no dependencies"
+start immediately and are not gated by anything:
 
 ```
 1. kafka          (no dependencies)
 2. schema-registry  (waits for kafka: healthy)
 3. kafka-ui         (waits for kafka + schema-registry: healthy)
 4. minio            (no dependencies)
-5. minio-init       (waits for minio: healthy, creates buckets, exits)
+5. minio-init       (waits for minio: started, creates buckets, exits)
 6. postgres         (no dependencies, runs init.sql on first start)
 7. redis            (no dependencies)
 8. prometheus       (no dependencies)
-9. grafana          (waits for prometheus: healthy)
+9. grafana          (waits for prometheus: started)
 ```
 
 > **KRaft note:** Kafka 3.7+ uses KRaft mode internally — there is no Zookeeper service. The `KAFKA_CLUSTER_ID` in `.env` must match the ID stored in the `oip-kafka-data` volume. If they mismatch, Kafka will refuse to start. See [troubleshooting](#troubleshooting).

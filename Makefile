@@ -151,9 +151,8 @@ logs: ## Tail logs from all services (Ctrl+C to stop)
 logs-kafka: ## Tail Kafka logs only
 	docker compose logs -f --tail=50 kafka
 
-.PHONY: logs-spark
-logs-spark: ## Tail Spark logs only (Phase 4+)
-	docker compose logs -f --tail=50 spark
+# NOTE: there is no `spark` Compose service. The Bronze/Silver/Gold Spark jobs
+# run on the host (`python main.py bronze|silver|gold`); inspect their stdout.
 
 # =============================================================================
 # VERIFICATION
@@ -350,5 +349,5 @@ test-unit: ## Run unit tests only
 	pytest tests/unit/ -v --tb=short
 
 .PHONY: test-integration
-test-integration: ## Run integration tests only (requires services running)
-	pytest tests/integration/ -v --tb=short
+test-integration: ## Run the four service-dependent test files under tests/unit/ (requires `docker compose up -d postgres redis` + filled .env)
+	pytest tests/unit/test_alerts.py tests/unit/test_notifications.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py -v --tb=short
