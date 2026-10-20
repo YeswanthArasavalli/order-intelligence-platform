@@ -53,8 +53,28 @@ It is built phase-by-phase, with each phase reviewed against Staff Data Engineer
 > Compose environment on a single machine. This is a portfolio reference
 > implementation, not a certified production deployment. High availability,
 > disaster recovery, cloud/on-prem certification and load testing are out of
-> scope; CI/CD is limited to a minimal workflow that runs the self-contained
-> unit suites (no build, deploy or hosted-service automation). No end-to-end exactly-once delivery guarantee
+> scope; CI/CD is a two-tier GitHub Actions workflow: the self-contained
+> `unit-tests` job and a `service-integration` job that runs the reproducible
+> service-dependent suites against throwaway PostgreSQL/Redis service containers
+> (no build, deploy or hosted-service automation). The workflow now also wires in
+> the self-seeding M8 notification suite (a 116-test collection gate), and that
+> expanded job has now had a successful authorized remote CI run: run
+> [39140812500](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39140812500)
+> (commit `adaa488`, branch `ci/service-integration`) reports overall success,
+> with its collection gate reporting exactly 116 tests collected and the pytest
+> step completing successfully — those per-step figures come from the
+> authenticated run logs, not the unauthenticated public page. The public run
+> page and job summaries do not expose the verbatim per-test pytest summary
+> (raw logs require authentication), so no explicit "116 passed" console line
+> is claimed here — successful job and step completion is reported, not an
+> observed pass/skip breakdown. An earlier authorized 116-test attempt, run
+> [39133404000](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39133404000)
+> on commit `b54bc6b`, failed during its pytest step and was superseded by this
+> successful run. An earlier `service-integration` run,
+> [39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230),
+> collected and ran only the 74 M4/M5/M7 suites (historical evidence only).
+> CI proves only the tests it actually executes; it is not proof of an
+> end-to-end operational pipeline. No end-to-end exactly-once delivery guarantee
 > is claimed; the data-quality/DLQ path is documented as at-least-once.
 ### Verified pipeline status
 
@@ -436,9 +456,10 @@ used. Read the build log to confirm it installs from
 six intended demo dependencies (streamlit, plotly, pandas, sqlalchemy, redis,
 pytest) are present, and that the full-pipeline packages (PySpark,
 confluent-kafka, boto3, psycopg2-binary) are absent; the live-page synthetic
-banner render itself was already observed on 2026-10-18. CI (`ubuntu-latest`,
-Python 3.11) has run the full `requirements.txt` install and the self-contained
-suites green for the dashboard tiers, but that is not the Cloud environment.
+banner render itself was already observed on 2026-10-18. CI (historically on
+`ubuntu-latest`, now pinned `ubuntu-24.04`; Python 3.11) has run the full
+`requirements.txt` install and the self-contained suites green for the
+dashboard tiers, but that is not the Cloud environment.
 
 Hosted dependency diagnosis (measured locally, cross-resolved for Cloud Linux with
 `pip install --dry-run --only-binary=:all: --platform manylinux2014_x86_64`): the
@@ -590,7 +611,7 @@ operational in this repository**; a forecast/ML detector remains a
 | Serialisation     | Apache Avro                      | —        | Schema-governed message format       |
 | Language          | Python                           | 3.11+    | All application code                 |
 | Containers        | Docker Compose                   | v2       | Local infrastructure                 |
-| CI/CD             | GitHub Actions                   | n/a      | Minimal workflow running the self-contained unit suites only |
+| CI/CD             | GitHub Actions                   | n/a      | Two-job workflow: self-contained unit suites plus a service-integration suite on PostgreSQL 16/Redis 7 service containers (no build or deploy automation) |
 
 ---
 
@@ -602,7 +623,11 @@ ORDER_CREATED → ORDER_PAID → ORDER_SHIPPED → ORDER_DELIVERED
       └→ ORDER_CANCELLED    ORDER_REFUNDED
 ```
 
-**Net revenue = SUM(ORDER_PAID.charged_amount) − SUM(ORDER_REFUNDED.refund_amount) − SUM(ORDER_CANCELLED[was_paid=true].amount)**
+**Net revenue = SUM(ORDER_PAID.amount) − SUM(ORDER_REFUNDED.amount) − SUM(ORDER_CANCELLED[was_paid=true].amount)**
+
+All three terms read the same Avro `amount` field of the respective event
+(`producer/schemas/order_event.avsc`); `streaming/GOLD_CONTRACT.md` defines
+`gross_revenue` as the sum of PAID amounts (charged after discounts).
 
 Revenue is recognised at `ORDER_PAID`, not `ORDER_CREATED`.
 
@@ -748,25 +773,29 @@ MinIO, PostgreSQL, Redis, Prometheus, Grafana). Container health is **not**
 proof that the streaming pipeline produced correct results, and the target
 prints per-check PASS/FAIL but always exits 0 — read its output, not its
 status code. `python main.py verify` runs the application-code suites listed
-in [Testing and verification](#testing-and-verification); that is also what CI
-runs.
+in [Testing and verification](#testing-and-verification); that is also what
+the CI `unit-tests` job runs.
 
 ---
 
 ## Startup sequence
 
-Services start in dependency order, enforced by Docker healthchecks:
+Services start in dependency order via Compose `depends_on`, using two different
+gates. Read the parenthetical on each line below: `service_healthy` waits until
+the dependency's healthcheck passes, whereas `service_started` only waits for the
+container to come up (no healthcheck gate). Services marked "no dependencies"
+start immediately and are not gated by anything:
 
 ```
 1. kafka          (no dependencies)
 2. schema-registry  (waits for kafka: healthy)
 3. kafka-ui         (waits for kafka + schema-registry: healthy)
 4. minio            (no dependencies)
-5. minio-init       (waits for minio: healthy, creates buckets, exits)
+5. minio-init       (waits for minio: started, creates buckets, exits)
 6. postgres         (no dependencies, runs init.sql on first start)
 7. redis            (no dependencies)
 8. prometheus       (no dependencies)
-9. grafana          (waits for prometheus: healthy)
+9. grafana          (waits for prometheus: started)
 ```
 
 > **KRaft note:** Kafka 3.7+ uses KRaft mode internally — there is no Zookeeper service. The `KAFKA_CLUSTER_ID` in `.env` must match the ID stored in the `oip-kafka-data` volume. If they mismatch, Kafka will refuse to start. See [troubleshooting](#troubleshooting).
@@ -938,14 +967,19 @@ binary; when `HADOOP_HOME` does not resolve to a `bin\winutils.exe`, those three
 tests are **skipped with an explicit reason** (never silently passed). To execute
 them on Windows, install a Hadoop winutils build and set `HADOOP_HOME` to its
 root (with `%HADOOP_HOME%\bin\winutils.exe` present). On Linux — including the
-CI `ubuntu-latest` runner — the prerequisite is not needed and all three run.
+CI `ubuntu-24.04` runner (the workflow previously used `ubuntu-latest`) — the
+prerequisite is not needed and all three run.
 
-**Service-dependent suites (116 tests)** — not run by CI:
+**Service-dependent suites (116 tests)** — the CI `service-integration` job
+now targets all 116 (it previously ran only the 74 M4/M5/M7 tests; the
+expanded 116-test job has now had a successful authorized remote CI run, run
+[39140812500](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39140812500)
+on commit `adaa488`):
 
 | Suite | Tests | Requires |
 |---|---|---|
 | `tests/unit/test_alerts.py` | 40 | running PostgreSQL (M7 persistence) |
-| `tests/unit/test_notifications.py` | 42 | running PostgreSQL + loopback HTTP receiver |
+| `tests/unit/test_notifications.py` | 42 | running PostgreSQL (self-seeded M7 fixture) + loopback HTTP receiver |
 | `tests/unit/test_postgres_serving.py` | 10 | running PostgreSQL |
 | `tests/unit/test_redis_serving.py` | 24 | running PostgreSQL + Redis |
 
@@ -954,12 +988,75 @@ Despite living under `tests/unit/`, these execute against the real local stack
 isolated disposable schemas/namespaces; they are integration-grade and are
 excluded from `python main.py verify`.
 
+**The CI `service-integration` job.** `.github/workflows/ci.yml` adds a second
+job that starts ephemeral GitHub Actions service containers (`postgres:16` and
+`redis:7`, CI-only dummy credentials) and runs
+`tests/unit/test_alerts.py` (40), `tests/unit/test_notifications.py` (42),
+`tests/unit/test_postgres_serving.py` (10) and
+`tests/unit/test_redis_serving.py` (24) — 116 tests. A collection gate
+fails the job unless exactly 116 tests are collected; there are no
+`skipIf`-style guards in these suites, so an unreachable PostgreSQL or Redis
+errors the fixtures and fails the run rather than silently skipping. Each
+suite creates uniquely-named disposable schemas (`m4_test_*`, `m5_test_*`,
+`m7_source_*`/`m7_test_*`, `m7_m8_*`/`m8_test_*`) and Redis namespaces
+(`oip:m5:test-*`) and drops them at teardown, so the job needs no retained
+state and, by source inspection of the suites, performs no reads of shared or
+retained certified data. The M8 suite
+(`tests/unit/test_notifications.py`, 42) is now self-seeding: its fixture
+publishes a disposable `m7_source_*` snapshot and runs the genuine frozen M7
+evaluator into an isolated `m7_m8_*` alert schema, then binds
+`NotificationService` to that generated source via its supported `source`
+parameter and a unique `m8_test_*` target schema, so the fixture seeds its own
+source and its generated events no longer depend on retained
+`alerts_serving.alert_events` rows; every service instance that can reach a
+read is bound to a generated schema, and the two negative paths associated
+with the production default source (the unreachable-engine construction,
+whose first transaction fails before any schema-level read, and the CLI
+redaction test, whose provider validation fails before the service is ever
+constructed) are established by source inspection to never consult a
+schema; the fixture's teardown drops each of its own three uniquely-named
+schemas in its own transaction — so one failed drop cannot roll back the
+others — including on partial-setup and test-body failures, and behavioral
+isolation is claimed only once the suite actually executes. That execution
+has since happened locally: on 2026-10-18 the suites ran against a freshly
+provisioned disposable PostgreSQL 16.15 / Redis 7.4.11 pair (loopback-bound
+ports, least-privilege non-superuser test login) — the focused
+outage-and-recovery test passed (1), the full M8 suite passed (42), and the
+four-suite regression passed 116/116 with 0 failed, 0 skipped, 0 xfailed and 0
+errors (pytest exit code 0), with exactly 116 collected; the generated test
+schemas were cleaned up and the disposable Redis keyspace was empty afterward,
+and the temporary resources were removed by exact name. Gitignored evidence
+logs live under `logs/phase2h_evidence/`. The hosted workflow has since had
+its first successful authorized remote run of the 116-test job: run
+[39140812500](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39140812500)
+(commit `adaa488`, branch `ci/service-integration`) reports overall success.
+An earlier authorized 116-test attempt, run
+[39133404000](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39133404000)
+on commit `b54bc6b`, failed during its pytest step and was superseded by this
+successful run. The collection gate reporting exactly 116 tests collected and
+the pytest step completing successfully are drawn from the authenticated run
+logs; because GitHub's raw Actions logs require authentication, the public run
+page does not expose those per-step figures or the verbatim per-test pytest
+summary, so this README reports the successful job/step completion rather than
+claiming an observed "116 passed" console line readable from the
+unauthenticated page.
+This job adds no build, deploy or hosted-service automation, and a green
+116-test run proves only those executed suites on the CI services — not the
+full Kafka→Spark→MinIO pipeline end to end.
+(An earlier published run —
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
+— executed the 74-test version of this job and is recorded with its
+evidence limits under
+[Testing and verification](#testing-and-verification).)
+
 **Recorded history vs. what you can reproduce.** The 179-test (M8) and
 202-test (M9) figures in `PHASE_STATUS.md` and the milestone reports were
 executed inside the Linux verification container with the full local stack up;
 they are historical evidence, not results any host reproduces by default.
 
-The self-contained tier was **freshly re-executed at this commit** on
+The self-contained tier was **freshly re-executed at commit `ee0bcfe`** (an
+earlier commit than the current HEAD `adaa488`, so this is provenance for that
+tree, not a re-run at HEAD) on
 2026-10-11 on a Windows 11 (build 26300) host — repository commit `ee0bcfe`
 plus the dashboard currency-display polish (nine additional display-formatter
 tests in `test_dashboard.py`: 44 → 53 collected; stored values and contract
@@ -995,7 +1092,42 @@ On Linux the three winutils-gated tests execute, so the tier is 212 collected,
 workflow provisions Python 3.11 and Java 17 and runs the same
 `python main.py verify` command). The overall conclusion is the only CI figure
 claimed here — the per-test Linux pass/skip breakdown is not available from this
-environment, so no exact CI pass count is stated.
+environment, so no exact CI pass count is stated. The `service-integration`
+job has since had its first published run: run
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230)
+(October 18, 2026, branch `ci/service-integration`, commit
+`e4096f79bbd6472b46b383bd11dde43c693dcc5c`) is reported as completed with
+overall success, including a successful `service-integration` job and a
+successful `unit-tests` job. The run page shows the job provisioned
+PostgreSQL 16 and Redis 7 service containers, its collection gate verified
+that exactly 74 tests were collected (`test_alerts.py` 40,
+`test_postgres_serving.py` 10, `test_redis_serving.py` 24), and the pytest
+command completed with exit status 0 per the existing run report. The
+verbatim pytest summary — the exact passed/skipped breakdown — was not
+verified from the available evidence, because GitHub's raw Actions logs
+require authentication; no "74 passed, 0 skipped" claim is made here. This
+run evidences only those 74 M4/M5/M7 suites against disposable CI service
+containers — not production readiness, complete end-to-end functionality, or
+full integration coverage. The 42 M8 notification tests have since been made
+self-seeding in code (fixture publishes an isolated `m7_source_*` snapshot,
+runs the frozen M7 evaluator into an isolated `m7_m8_*` alert schema and
+binds the service to it via `source`) and are now part of the workflow's
+116-test collection/execution commands, and the 116-test job has since had
+its first successful authorized remote CI run: run
+[39140812500](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39140812500)
+(commit `adaa488`, branch `ci/service-integration`) reports overall success;
+an earlier authorized attempt, run
+[39133404000](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39133404000)
+on commit `b54bc6b`, failed during its pytest step and was superseded by this
+run. The collection gate's "116 tests collected" and the successful pytest step
+are reported from the authenticated run logs, not the public page; the
+auth-gated raw logs do not expose the verbatim per-test summary, so no explicit
+"116 passed" console line is claimed
+here. A local behavioral run of the M8 suite had also been performed and passed
+(42/42, with the four-suite regression at 116/116 on a freshly provisioned
+disposable PostgreSQL/Redis pair — gitignored evidence under
+`logs/phase2h_evidence/`), corroborating the suites independently of the hosted
+run.
 
 ---
 
@@ -1096,10 +1228,28 @@ M1-M9 and Phase C are complete and frozen.
 | Phase C | Local Docker packaging / sealed MinIO runtime verification | FROZEN |
 
 **There is no M10.** No further milestones are planned in this repository.
-**CI/CD is minimal by design** - `.github/workflows/ci.yml` runs only
-`python main.py verify` (the self-contained suites) on push and pull requests.
-There is no build, deploy or hosted-service automation, and no deployment
-pipeline is claimed.
+**CI/CD is deliberately narrow** - `.github/workflows/ci.yml` runs two jobs:
+`unit-tests` executes `python main.py verify` (the self-contained suites) and
+`service-integration` is configured in the local workflow to execute the 116
+reproducible service-dependent suites (M4/M5/M7 plus the self-seeding M8
+notification suite) against ephemeral PostgreSQL 16/Redis 7 service
+containers. The expanded 116-test job has now had its first successful
+authorized remote CI run: run
+[39140812500](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39140812500)
+(commit `adaa488`, branch `ci/service-integration`) reports overall success;
+an earlier authorized attempt, run
+[39133404000](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39133404000)
+on commit `b54bc6b`, failed during its pytest step and was superseded by this
+run. Its collection gate reported exactly 116 tests collected and the pytest
+step completed successfully per the authenticated run logs (the auth-gated raw
+logs, not the public page, are the source of those figures, and they do not
+expose the verbatim per-test summary, so no explicit "116 passed" console line
+is claimed here). An earlier published `service-integration` run,
+[39106581230](https://github.com/YeswanthArasavalli/order-intelligence-platform/actions/runs/39106581230),
+validated the 74-test (M4/M5/M7) version of that job, and the 42 M8 tests were
+additionally validated locally against a disposable PostgreSQL/Redis instance
+(see [Testing and verification](#testing-and-verification)). There is no build, deploy or hosted-service automation, and no
+deployment pipeline is claimed.
 
 ---
 ## Phase 1 acceptance criteria

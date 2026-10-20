@@ -1,19 +1,43 @@
-# Minimal CI: runs ONLY the repository's self-contained unit verification.
-# Scope boundary: this workflow executes `python main.py verify`
-# (scripts/verify.py), which runs the suites that need no Docker, Kafka,
-# Spark cluster, MinIO, PostgreSQL or Redis services and no credentials or
-# secrets. Service-dependent suites (alerts, notifications, PostgreSQL/Redis
-# serving) are intentionally excluded; see README "Testing and verification".
+# Two-tier CI, both tiers free of any personal spending or private state:
+#
+# 1. `unit-tests` — ONLY the repository's self-contained unit verification.
+#    It executes `python main.py verify` (scripts/verify.py): the suites that
+#    need no Docker, Kafka, Spark cluster, MinIO, PostgreSQL or Redis services
+#    and no credentials or secrets.
+# 2. `service-integration` — the 116 reproducible service-dependent suites
+#    (M4 PostgreSQL serving, M5 Redis serving, M7 alert evaluation and the
+#    self-seeding M8 notification suite) executed against throwaway GitHub
+#    Actions service containers (postgres:16, redis:7) with CI-only dummy
+#    credentials. A collection gate fails the job unless exactly 116 tests are
+#    collected, so missing services or changed suites surface as failures,
+#    never as silent skips.
+#    M8 (tests/unit/test_notifications.py) is self-seeding: its fixture
+#    publishes a disposable m7_source_* snapshot, runs the frozen M7 evaluator
+#    into an isolated m7_m8_* alert schema and binds the notification service
+#    to that generated source via its supported `source` parameter, so the
+#    fixture seeds its own source and its generated events no longer depend on
+#    retained local M7 fixture rows in `alerts_serving`. That isolation is a
+#    source-inspection property of the test code; behavioral isolation and the
+#    116-test job itself are only proven once this job actually runs.
+#
 # There is no build, deploy or hosted-service automation in this repository.
+# CI proves only the tests it actually executes; it is not proof of a
+# full end-to-end streaming pipeline.
 name: CI
 
 on:
   push:
   pull_request:
 
+# Least-privilege token scope: this workflow only checks out code and runs tests
+# against throwaway service containers. No step publishes packages, deploys, or
+# writes to the repository, so read-only contents access is sufficient.
+permissions:
+  contents: read
+
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -36,3 +60,80 @@ jobs:
 
       - name: Run self-contained verification suite
         run: python main.py verify
+
+  service-integration:
+    # Reproducible service-dependent tier: M7 alert evaluation (tests/unit/
+    # test_alerts.py, 40), M4 PostgreSQL serving (tests/unit/
+    # test_postgres_serving.py, 10), M5 Redis serving (tests/unit/
+    # test_redis_serving.py, 24) and the self-seeding M8 notification suite
+    # (tests/unit/test_notifications.py, 42). Each suite creates uniquely-
+    # named disposable schemas (m4_test_*, m5_test_*, m7_source_*/m7_test_*,
+    # m7_m8_*/m8_test_*) and Redis namespaces (oip:m5:test-*) and drops them
+    # on teardown; by source inspection nothing here reads shared, production
+    # or retained certified state, and this job run is what proves it.
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oip_user
+          POSTGRES_DB: order_intelligence
+          POSTGRES_PASSWORD: ci-oip-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oip_user -d order_intelligence"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    # Explicit configuration (mirrors, not new behavior): the suites build
+    # engines through storage.gold_postgres_serving.get_engine /
+    # storage.postgres_redis_serving.get_postgres_engine, which require
+    # POSTGRES_PASSWORD and otherwise default to oip_user/order_intelligence
+    # on localhost:5432; get_redis_client defaults to localhost:6379 with no
+    # auth. Setting every value keeps the job honest about what it connects to.
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: oip_user
+      POSTGRES_DB: order_intelligence
+      POSTGRES_PASSWORD: ci-oip-password
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Assert exactly 116 service-integration tests are collected
+        run: |
+          line=$(python -m pytest tests/unit/test_alerts.py tests/unit/test_notifications.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py --collect-only -q | tail -n 1)
+          echo "collection summary: $line"
+          echo "$line" | grep -qE '^116 tests collected' || {
+            echo "::error::expected exactly 116 collected tests (M7 40 + M8 42 + M4 10 + M5 24); got: $line"
+            exit 1
+          }
+
+      # No continue-on-error, no retries, no skip tolerance: the real pytest
+      # exit status is the job status. Connection loss to either service
+      # raises inside the fixtures and fails the run.
+      - name: Run service-dependent suites against the CI PostgreSQL/Redis
+        run: python -m pytest -q tests/unit/test_alerts.py tests/unit/test_notifications.py tests/unit/test_postgres_serving.py tests/unit/test_redis_serving.py

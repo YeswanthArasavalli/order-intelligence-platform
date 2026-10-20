@@ -13,10 +13,7 @@ Connection pooling via SQLAlchemy (pool_size=5, max_overflow=2).
 
 import os
 from contextlib import contextmanager
-from typing import List
 
-import psycopg2
-import psycopg2.extras
 from pyspark.sql import DataFrame
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import QueuePool

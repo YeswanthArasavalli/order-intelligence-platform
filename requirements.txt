@@ -76,7 +76,9 @@ pytest-asyncio==0.24.0          # Async test support
 pytest-mock==3.14.0             # Mocking utilities
 
 # ---------------------------------------------------------------------------
-# CODE QUALITY (dev only — included for CI)
+# CODE QUALITY (dev only — invoked manually via `make lint`; the two CI jobs
+# run tests only and never invoke ruff/black, so lint findings do not block a
+# push and CI does not assert these tools are clean)
 # ---------------------------------------------------------------------------
 ruff==0.7.4                     # Linting (replaces flake8 + isort)
 black==24.10.0                  # Code formatting

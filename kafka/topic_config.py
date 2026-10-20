@@ -174,7 +174,8 @@ if __name__ == "__main__":
         list_topics(args.bootstrap)
     elif args.delete:
         print("WARNING: Deleting all OIP topics. Press Ctrl+C within 5s to abort.")
-        import time; time.sleep(5)
+        import time
+        time.sleep(5)
         delete_topics(args.bootstrap)
         create_topics(args.bootstrap)
     else:
