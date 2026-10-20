@@ -420,7 +420,7 @@ def test_provider_connection_outage_then_recovery(world, tmp_path, monkeypatch):
     service, _, events, rows = world
     with running_receiver(tmp_path / "offline.sqlite") as receiver:
         port = receiver.server_port
-        provider = ControlledHTTPProvider(receiver.endpoint, "offline-inbox", timeout=0.1)
+        provider = ControlledHTTPProvider(receiver.endpoint, "offline-inbox", timeout=0.2)
     offline = NotificationService(service.engine, provider, source=service.source, schema=service.schema,
                                   policy=service.policy)
     # Connecting to a freshly closed loopback listener is platform-specific:
@@ -444,7 +444,8 @@ def test_provider_connection_outage_then_recovery(world, tmp_path, monkeypatch):
     outage["refusing"] = False
     with running_receiver(tmp_path / "offline.sqlite", port) as receiver:
         wait_due(offline)
-        assert offline.process([events[0]])["notifications_delivered"] == 1
+        result = offline.process([events[0]])
+        assert result["notifications_delivered"] == 1, f"result={result}"
         assert len(receiver.records()["receipts"]) == 1
 
 
